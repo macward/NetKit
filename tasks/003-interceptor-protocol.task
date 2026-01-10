@@ -12,25 +12,25 @@ Create the Interceptor protocol and provide AuthInterceptor and LoggingIntercept
 - Branch: `feature/interceptors`
 
 ## Steps
-1. [ ] Create `Sources/NetKit/Interceptors/` directory
-2. [ ] Create `Interceptor.swift` with protocol:
+1. [x] Create `Sources/NetKit/Interceptors/` directory
+2. [x] Create `Interceptor.swift` with protocol:
    - `func intercept(request: URLRequest) async throws -> URLRequest`
    - `func intercept(response: HTTPURLResponse, data: Data) async throws -> Data`
-3. [ ] Add default empty implementations via extension
-4. [ ] Create `AuthInterceptor.swift`:
+3. [x] Add default empty implementations via extension
+4. [x] Create `AuthInterceptor.swift`:
    - Token provider closure for header injection
    - Optional token refresh handler
-5. [ ] Create `LoggingInterceptor.swift`:
+5. [x] Create `LoggingInterceptor.swift`:
    - Configurable log levels (none, minimal, verbose)
    - Log request method, URL, headers, body
    - Log response status, headers, body
 
 ## Acceptance Criteria
-- [ ] Protocol methods have default implementations (do nothing)
-- [ ] AuthInterceptor injects Authorization header
-- [ ] AuthInterceptor supports async token refresh
-- [ ] LoggingInterceptor respects configured log level
-- [ ] All types are `public`
+- [x] Protocol methods have default implementations (do nothing)
+- [x] AuthInterceptor injects Authorization header
+- [x] AuthInterceptor supports async token refresh
+- [x] LoggingInterceptor respects configured log level
+- [x] All types are `public`
 
 ## Notes
 - Interceptors run in order: request interceptors forward, response interceptors reverse
