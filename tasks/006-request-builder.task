@@ -12,21 +12,21 @@ Create the RequestBuilder for fluent API pattern, allowing per-request overrides
 - Branch: `feature/request-builder`
 
 ## Steps
-1. [ ] Create `RequestBuilder.swift` with generic class/struct:
+1. [x] Create `RequestBuilder.swift` with generic class/struct:
    - Store reference to endpoint and client
    - `timeout(_ seconds: TimeInterval) -> Self`
    - `header(_ key: String, _ value: String) -> Self`
    - `headers(_ headers: [String: String]) -> Self`
    - `send() async throws -> E.Response`
-2. [ ] Implement fluent chaining pattern
-3. [ ] Merge overrides with endpoint defaults (overrides win)
+2. [x] Implement fluent chaining pattern
+3. [x] Merge overrides with endpoint defaults (overrides win)
 
 ## Acceptance Criteria
-- [ ] Supports method chaining
-- [ ] `send()` executes the request with all overrides applied
-- [ ] Overrides don't mutate original endpoint
-- [ ] Returns correct Response type
-- [ ] All types are `public`
+- [x] Supports method chaining
+- [x] `send()` executes the request with all overrides applied
+- [x] Overrides don't mutate original endpoint
+- [x] Returns correct Response type
+- [x] All types are `public`
 
 ## Notes
 - This enables: `client.request(endpoint).timeout(60).header("X-Custom", "value").send()`

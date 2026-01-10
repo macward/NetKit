@@ -10,23 +10,23 @@ Create a simple in-memory response cache for caching API responses.
 - Branch: `feature/response-cache`
 
 ## Steps
-1. [ ] Create `Sources/NetKit/Cache/` directory
-2. [ ] Create `ResponseCache.swift` with:
+1. [x] Create `Sources/NetKit/Cache/` directory
+2. [x] Create `ResponseCache.swift` with:
    - In-memory storage (actor for thread safety)
    - `store(data:for:ttl:)` method
    - `retrieve(for:) -> Data?` method
    - `invalidate(for:)` method
    - `invalidateAll()` method
-3. [ ] Add cache key generation from URLRequest
-4. [ ] Add TTL (time-to-live) support with automatic expiration
-5. [ ] Add optional max size limit
+3. [x] Add cache key generation from URLRequest
+4. [x] Add TTL (time-to-live) support with automatic expiration
+5. [x] Add optional max size limit
 
 ## Acceptance Criteria
-- [ ] Thread-safe (use actor)
-- [ ] Respects TTL - expired entries return nil
-- [ ] Can invalidate single entry or all entries
-- [ ] Cache key based on URL + method + relevant headers
-- [ ] All types are `public`
+- [x] Thread-safe (use actor)
+- [x] Respects TTL - expired entries return nil
+- [x] Can invalidate single entry or all entries
+- [x] Cache key based on URL + method + relevant headers
+- [x] All types are `public`
 
 ## Notes
 - Keep it simple - in-memory only, no disk persistence
