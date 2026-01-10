@@ -1,0 +1,34 @@
+# Task: Request Builder
+
+## Objective
+Create the RequestBuilder for fluent API pattern, allowing per-request overrides.
+
+## Context
+- Related files:
+  - `Sources/NetKit/Core/RequestBuilder.swift`
+- Dependencies:
+  - `001-models-foundation.task`
+  - `002-endpoint-protocol.task`
+- Branch: `feature/request-builder`
+
+## Steps
+1. [ ] Create `RequestBuilder.swift` with generic class/struct:
+   - Store reference to endpoint and client
+   - `timeout(_ seconds: TimeInterval) -> Self`
+   - `header(_ key: String, _ value: String) -> Self`
+   - `headers(_ headers: [String: String]) -> Self`
+   - `send() async throws -> E.Response`
+2. [ ] Implement fluent chaining pattern
+3. [ ] Merge overrides with endpoint defaults (overrides win)
+
+## Acceptance Criteria
+- [ ] Supports method chaining
+- [ ] `send()` executes the request with all overrides applied
+- [ ] Overrides don't mutate original endpoint
+- [ ] Returns correct Response type
+- [ ] All types are `public`
+
+## Notes
+- This enables: `client.request(endpoint).timeout(60).header("X-Custom", "value").send()`
+- Builder should hold weak reference to client to avoid retain cycles
+- Consider making it a struct for value semantics

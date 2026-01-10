@@ -1,0 +1,46 @@
+# Task: Unit Tests
+
+## Objective
+Create comprehensive unit tests for all NetKit components.
+
+## Context
+- Related files:
+  - `Tests/NetKitTests/`
+- Dependencies: ALL previous tasks
+- Branch: `feature/tests`
+
+## Steps
+1. [ ] Create test directory structure
+2. [ ] Test `HTTPMethod` - raw values
+3. [ ] Test `NetworkError` - error cases and equality
+4. [ ] Test `EmptyResponse` - init and Equatable
+5. [ ] Test `Environment` - defaults
+6. [ ] Test `Endpoint` - defaults via test struct
+7. [ ] Test `RetryPolicy` - retry logic, delays, exponential backoff
+8. [ ] Test `ResponseCache` - store, retrieve, TTL expiration, invalidation
+9. [ ] Test `Interceptor` implementations:
+   - AuthInterceptor header injection
+   - LoggingInterceptor (verify no crash)
+10. [ ] Test `MockNetworkClient`:
+    - Stubbing responses
+    - Stubbing errors
+    - Call counting
+    - Reset
+11. [ ] Test `NetworkClient` (with mock URLSession or MockNetworkClient):
+    - Successful request flow
+    - Error handling
+    - EmptyResponse handling
+    - Retry behavior
+    - Cache behavior
+
+## Acceptance Criteria
+- [ ] All tests pass
+- [ ] Good coverage of happy paths
+- [ ] Good coverage of error paths
+- [ ] Tests are isolated (no network calls)
+- [ ] Tests run fast
+
+## Notes
+- Use URLProtocol subclass to mock URLSession if needed
+- Or test NetworkClient through MockNetworkClient for integration-style tests
+- Focus on behavior, not implementation details

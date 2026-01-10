@@ -1,0 +1,43 @@
+# Task: Package Exports & Final Setup
+
+## Objective
+Create the main NetKit.swift file with public exports and ensure Package.swift is properly configured.
+
+## Context
+- Related files:
+  - `Sources/NetKit/NetKit.swift`
+  - `Package.swift`
+- Dependencies: ALL previous tasks (001-010)
+- Branch: `feature/package-setup`
+
+## Steps
+1. [ ] Verify/update `Package.swift`:
+   - Swift tools version 6.0
+   - Platforms: iOS 18+, macOS 15+
+   - Library product exposing NetKit target
+2. [ ] Create `Sources/NetKit/NetKit.swift` (if needed for re-exports)
+3. [ ] Ensure all public types are accessible
+4. [ ] Verify directory structure matches spec:
+   ```
+   Sources/NetKit/
+   ├── Core/
+   ├── Interceptors/
+   ├── Models/
+   ├── Cache/
+   ├── Retry/
+   ├── Mock/
+   └── Extensions/
+   ```
+5. [ ] Add basic README with usage examples
+
+## Acceptance Criteria
+- [ ] Package compiles with `swift build`
+- [ ] All public APIs are accessible via `import NetKit`
+- [ ] No compiler warnings
+- [ ] Swift 6 strict concurrency compatible
+- [ ] iOS 18+ / macOS 15+ platform requirements enforced
+
+## Notes
+- May not need NetKit.swift if all types are already public
+- Test with `swift build` to catch any issues
+- Run `swift test` if tests exist

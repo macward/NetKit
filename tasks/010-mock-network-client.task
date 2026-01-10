@@ -1,0 +1,40 @@
+# Task: MockNetworkClient
+
+## Objective
+Create a mock client for testing that allows stubbing responses and tracking calls.
+
+## Context
+- Related files:
+  - `Sources/NetKit/Mock/MockNetworkClient.swift`
+- Dependencies:
+  - `001-models-foundation.task`
+  - `008-network-client-protocol.task`
+- Branch: `feature/mock-client`
+
+## Steps
+1. [ ] Create `Sources/NetKit/Mock/` directory
+2. [ ] Create `MockNetworkClient.swift` as `final class`
+3. [ ] Conform to `NetworkClientProtocol`
+4. [ ] Implement stubbing:
+   - `stub<E: Endpoint>(_ type: E.Type, response: @escaping (E) -> E.Response)`
+   - `stubError<E: Endpoint>(_ type: E.Type, error: NetworkError)`
+   - `stub<E: Endpoint>(_ type: E.Type, delay: TimeInterval, response: @escaping (E) -> E.Response)`
+5. [ ] Implement call tracking:
+   - `callCount<E: Endpoint>(for type: E.Type) -> Int`
+   - Store called endpoints for verification
+6. [ ] Implement `reset()` to clear all stubs and call history
+7. [ ] Implement `request()` to return stubbed response or throw stubbed error
+
+## Acceptance Criteria
+- [ ] Can stub success responses per endpoint type
+- [ ] Can stub errors per endpoint type
+- [ ] Can add delays to simulate network latency
+- [ ] Tracks call count per endpoint type
+- [ ] Reset clears everything
+- [ ] Throws if no stub configured for endpoint
+- [ ] Thread-safe
+
+## Notes
+- Use type identifier (ObjectIdentifier or String(describing:)) as key for stubs
+- Consider storing actual endpoint instances for detailed verification
+- Make it easy to use in XCTest
