@@ -10,24 +10,24 @@ Create a configurable retry policy for automatic request retries on failure.
 - Branch: `feature/retry-policy`
 
 ## Steps
-1. [ ] Create `Sources/NetKit/Retry/` directory
-2. [ ] Create `RetryPolicy.swift` with:
+1. [x] Create `Sources/NetKit/Retry/` directory
+2. [x] Create `RetryPolicy.swift` with:
    - `maxRetries: Int`
    - `retryableErrors: Set<NetworkError>` or predicate closure
    - `delay: RetryDelay` (immediate, fixed, exponential)
    - `shouldRetry(error:attempt:) -> Bool` method
    - `delay(for attempt:) -> TimeInterval` method
-3. [ ] Create `RetryDelay` enum:
+3. [x] Create `RetryDelay` enum:
    - `.immediate`
    - `.fixed(TimeInterval)`
    - `.exponential(base: TimeInterval, multiplier: Double)`
 
 ## Acceptance Criteria
-- [ ] Policy is configurable at init
-- [ ] Supports exponential backoff
-- [ ] Can filter which errors trigger retry
-- [ ] Respects max retry count
-- [ ] All types are `public`
+- [x] Policy is configurable at init
+- [x] Supports exponential backoff
+- [x] Can filter which errors trigger retry
+- [x] Respects max retry count
+- [x] All types are `public`
 
 ## Notes
 - Default retryable errors: noConnection, timeout, serverError(5xx)
