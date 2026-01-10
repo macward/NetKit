@@ -2,11 +2,11 @@ import Foundation
 
 /// A mock network client for testing that allows stubbing responses and tracking calls.
 public actor MockNetworkClient: NetworkClientProtocol {
-    private var stubs: [String: Any] = [:]
-    private var errorStubs: [String: NetworkError] = [:]
-    private var delays: [String: TimeInterval] = [:]
-    private var callCounts: [String: Int] = [:]
-    private var calledEndpoints: [String: [Any]] = [:]
+    private var stubs: [ObjectIdentifier: Any] = [:]
+    private var errorStubs: [ObjectIdentifier: NetworkError] = [:]
+    private var delays: [ObjectIdentifier: TimeInterval] = [:]
+    private var callCounts: [ObjectIdentifier: Int] = [:]
+    private var calledEndpoints: [ObjectIdentifier: [Any]] = [:]
 
     public init() {}
 
@@ -109,7 +109,7 @@ public actor MockNetworkClient: NetworkClientProtocol {
         }
 
         // Return response if stubbed
-        if let responseClosure = stubClosure as? (E) -> E.Response {
+        if let responseClosure = stubClosure as? @Sendable (E) -> E.Response {
             return responseClosure(endpoint)
         }
 
@@ -119,8 +119,8 @@ public actor MockNetworkClient: NetworkClientProtocol {
 
     // MARK: - Private
 
-    private func stubKey<E: Endpoint>(for type: E.Type) -> String {
-        String(describing: type)
+    private func stubKey<E: Endpoint>(for type: E.Type) -> ObjectIdentifier {
+        ObjectIdentifier(type)
     }
 }
 

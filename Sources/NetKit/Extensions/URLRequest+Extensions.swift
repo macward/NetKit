@@ -12,7 +12,7 @@ extension URLRequest {
     ///           `NetworkError.encodingError` if body encoding fails.
     public init<E: Endpoint>(
         endpoint: E,
-        environment: Environment,
+        environment: NetworkEnvironment,
         additionalHeaders: [String: String] = [:],
         timeoutOverride: TimeInterval? = nil,
         encoder: JSONEncoder = JSONEncoder()

@@ -2,7 +2,7 @@ import Foundation
 
 /// The main network client for executing API requests.
 public final class NetworkClient: NetworkClientProtocol, Sendable {
-    private let environment: Environment
+    private let environment: NetworkEnvironment
     private let interceptors: [any Interceptor]
     private let retryPolicy: RetryPolicy?
     private let cache: ResponseCache?
@@ -20,7 +20,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     ///   - decoder: The JSON decoder for responses. Defaults to `JSONDecoder()`.
     ///   - encoder: The JSON encoder for request bodies. Defaults to `JSONEncoder()`.
     public init(
-        environment: Environment,
+        environment: NetworkEnvironment,
         interceptors: [any Interceptor] = [],
         retryPolicy: RetryPolicy? = nil,
         cache: ResponseCache? = nil,

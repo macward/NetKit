@@ -1,7 +1,7 @@
 import Foundation
 
 /// Defines the configuration for a network environment.
-public protocol Environment: Sendable {
+public protocol NetworkEnvironment: Sendable {
     /// The base URL for all requests in this environment.
     var baseURL: URL { get }
 
@@ -12,7 +12,7 @@ public protocol Environment: Sendable {
     var timeout: TimeInterval { get }
 }
 
-public extension Environment {
+public extension NetworkEnvironment {
     var defaultHeaders: [String: String] { [:] }
     var timeout: TimeInterval { 30 }
 }
