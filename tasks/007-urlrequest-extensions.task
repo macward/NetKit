@@ -12,23 +12,23 @@ Create helper extensions on URLRequest for building requests from endpoints.
 - Branch: `feature/urlrequest-extensions`
 
 ## Steps
-1. [ ] Create `Sources/NetKit/Extensions/` directory
-2. [ ] Create `URLRequest+Extensions.swift` with:
+1. [x] Create `Sources/NetKit/Extensions/` directory
+2. [x] Create `URLRequest+Extensions.swift` with:
    - `init(endpoint:environment:)` - build URLRequest from Endpoint + Environment
    - Handle path construction with baseURL
    - Handle query parameter encoding
    - Handle body encoding (JSON)
    - Set HTTP method
    - Merge headers (environment defaults + endpoint headers)
-3. [ ] Add timeout configuration support
+3. [x] Add timeout configuration support
 
 ## Acceptance Criteria
-- [ ] Correctly builds full URL from baseURL + path
-- [ ] Properly encodes query parameters
-- [ ] Properly encodes JSON body
-- [ ] Sets Content-Type header for JSON body
-- [ ] Respects timeout from environment
-- [ ] Throws appropriate errors for invalid URL construction
+- [x] Correctly builds full URL from baseURL + path
+- [x] Properly encodes query parameters
+- [x] Properly encodes JSON body
+- [x] Sets Content-Type header for JSON body
+- [x] Respects timeout from environment
+- [x] Throws appropriate errors for invalid URL construction
 
 ## Notes
 - Query params: use URLComponents for proper encoding
