@@ -10,33 +10,33 @@ Create the main NetworkClient class that orchestrates all networking operations.
 - Branch: `feature/network-client`
 
 ## Steps
-1. [ ] Create `NetworkClient.swift` as `final class`
-2. [ ] Implement initializer:
+1. [x] Create `NetworkClient.swift` as `final class`
+2. [x] Implement initializer:
    - `environment: Environment`
    - `interceptors: [Interceptor] = []`
    - `retryPolicy: RetryPolicy? = nil`
    - `cache: ResponseCache? = nil`
-3. [ ] Implement `request<E: Endpoint>(_ endpoint: E) async throws -> E.Response`
-4. [ ] Build URLRequest from endpoint + environment
-5. [ ] Run request interceptors (in order)
-6. [ ] Execute URLSession request
-7. [ ] Run response interceptors (in reverse order)
-8. [ ] Handle HTTP status codes → NetworkError mapping
-9. [ ] Decode response (skip for EmptyResponse)
-10. [ ] Implement retry logic using RetryPolicy
-11. [ ] Implement cache check/store logic
-12. [ ] Add method returning RequestBuilder for fluent API
+3. [x] Implement `request<E: Endpoint>(_ endpoint: E) async throws -> E.Response`
+4. [x] Build URLRequest from endpoint + environment
+5. [x] Run request interceptors (in order)
+6. [x] Execute URLSession request
+7. [x] Run response interceptors (in reverse order)
+8. [x] Handle HTTP status codes → NetworkError mapping
+9. [x] Decode response (skip for EmptyResponse)
+10. [x] Implement retry logic using RetryPolicy
+11. [x] Implement cache check/store logic
+12. [x] Add method returning RequestBuilder for fluent API
 
 ## Acceptance Criteria
-- [ ] Conforms to NetworkClientProtocol
-- [ ] Supports simple `request()` call
-- [ ] Supports fluent `request().timeout().header().send()` pattern
-- [ ] Runs interceptors in correct order
-- [ ] Handles EmptyResponse without decoding
-- [ ] Maps HTTP status codes to NetworkError
-- [ ] Retries according to policy
-- [ ] Caches responses when cache is configured
-- [ ] Thread-safe (Sendable)
+- [x] Conforms to NetworkClientProtocol
+- [x] Supports simple `request()` call
+- [x] Supports fluent `request().timeout().header().send()` pattern
+- [x] Runs interceptors in correct order
+- [x] Handles EmptyResponse without decoding
+- [x] Maps HTTP status codes to NetworkError
+- [x] Retries according to policy
+- [x] Caches responses when cache is configured
+- [x] Thread-safe (Sendable)
 
 ## Notes
 - Use URLSession.shared or allow custom session injection

@@ -10,15 +10,15 @@ Create the NetworkClientProtocol for dependency injection and testability.
 - Branch: `feature/network-client-protocol`
 
 ## Steps
-1. [ ] Create `NetworkClientProtocol.swift` with:
+1. [x] Create `NetworkClientProtocol.swift` with:
    - `func request<E: Endpoint>(_ endpoint: E) async throws -> E.Response`
-2. [ ] Keep protocol minimal - only the essential method
+2. [x] Keep protocol minimal - only the essential method
 
 ## Acceptance Criteria
-- [ ] Protocol is `public`
-- [ ] Generic constraint on Endpoint
-- [ ] Returns associated Response type
-- [ ] Async throwing function
+- [x] Protocol is `public`
+- [x] Generic constraint on Endpoint
+- [x] Returns associated Response type
+- [x] Async throwing function
 
 ## Notes
 - This is intentionally minimal
