@@ -154,14 +154,18 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     /// Validates the HTTP response status code.
     private func validateResponse(_ response: HTTPURLResponse) throws {
         switch response.statusCode {
-        case 200..<300:
+        case 200..<204, 205..<300:
             return
+        case 204:
+            throw NetworkError.noContent
         case 401:
             throw NetworkError.unauthorized
         case 403:
             throw NetworkError.forbidden
         case 404:
             throw NetworkError.notFound
+        case 408:
+            throw NetworkError.timeout
         case 500..<600:
             throw NetworkError.serverError(statusCode: response.statusCode)
         default:

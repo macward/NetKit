@@ -6,3 +6,6 @@
 // - NetworkEnvironment: Protocol for defining base URLs and defaults
 // - Interceptor: Protocol for request/response interception
 // - MockNetworkClient: Testing double for unit tests
+// - LongPollingEndpoint: Protocol for long polling endpoints
+// - LongPollingConfiguration: Preset configurations for polling behavior
+// - LongPollingStream: AsyncSequence for receiving polling responses

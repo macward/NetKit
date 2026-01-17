@@ -1,0 +1,33 @@
+# Task: Long Polling Tests
+
+## Objective
+Add comprehensive tests for long polling functionality including timeout handling, cancellation, and reconnection behavior.
+
+## Context
+- Related files: `Tests/NetKitTests/NetKitTests.swift`, `Sources/NetKit/Mock/MockNetworkClient.swift`
+- Dependencies: Tasks 013, 014
+- Branch: feature/long-polling
+
+## Steps
+1. [x] Extend `MockNetworkClient` to support long polling simulation:
+   - `stubSequence<E>(_ type: E.Type, responses: [E.Response], delays: [TimeInterval])`
+   - `stubSequence<E>(_ type: E.Type, sequence: [Result<E.Response, NetworkError>], delays: [TimeInterval])`
+   - Ability to simulate timeouts and reconnections via mixed results
+2. [x] Create `LongPollingTests` test class with:
+   - `LongPollingEndpoint Tests` - protocol defaults and custom values
+   - `LongPollingConfiguration Tests` - presets and custom config
+   - `LongPollingState Tests` - state equatable
+   - `MockNetworkClient Sequence Tests` - sequence stubbing, mixed results, delays
+   - `NetworkError NoContent Tests` - new error case
+3. [x] Update README.md with long polling documentation and examples
+4. [x] Run `swift test` to verify all tests pass (54 tests in 16 suites)
+
+## Acceptance Criteria
+- [x] All new tests pass (14 new tests added)
+- [x] Existing tests still pass (40 original tests)
+- [x] README includes long polling usage example
+- [x] MockNetworkClient supports polling simulation
+
+## Notes
+- Use short delays in tests (0.1s) for fast execution
+- Test both success and error paths

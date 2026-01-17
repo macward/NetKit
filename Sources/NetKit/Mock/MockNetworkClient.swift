@@ -7,6 +7,15 @@ public actor MockNetworkClient: NetworkClientProtocol {
     private var delays: [ObjectIdentifier: TimeInterval] = [:]
     private var callCounts: [ObjectIdentifier: Int] = [:]
     private var calledEndpoints: [ObjectIdentifier: [Any]] = [:]
+    private var sequenceStubs: [ObjectIdentifier: SequenceStub] = [:]
+
+    /// Internal struct to track sequence-based stubs
+    private struct SequenceStub {
+        var responses: [Any]
+        var errors: [NetworkError?]
+        var delays: [TimeInterval]
+        var currentIndex: Int = 0
+    }
 
     public init() {}
 
@@ -44,6 +53,65 @@ public actor MockNetworkClient: NetworkClientProtocol {
         errorStubs.removeValue(forKey: key)
     }
 
+    // MARK: - Sequence Stubbing (for polling tests)
+
+    /// Stubs a sequence of responses for an endpoint type.
+    /// Each call returns the next response in the sequence.
+    /// After all responses are exhausted, throws `MockError.sequenceExhausted`.
+    /// - Parameters:
+    ///   - type: The endpoint type to stub.
+    ///   - responses: Array of responses to return in order.
+    ///   - delays: Optional array of delays for each response.
+    public func stubSequence<E: Endpoint>(
+        _ type: E.Type,
+        responses: [E.Response],
+        delays: [TimeInterval] = []
+    ) {
+        let key = stubKey(for: type)
+        sequenceStubs[key] = SequenceStub(
+            responses: responses,
+            errors: Array(repeating: nil, count: responses.count),
+            delays: delays
+        )
+        stubs.removeValue(forKey: key)
+        errorStubs.removeValue(forKey: key)
+    }
+
+    /// Stubs a sequence of responses and errors for an endpoint type.
+    /// Use this to simulate intermittent failures during polling.
+    /// - Parameters:
+    ///   - type: The endpoint type to stub.
+    ///   - sequence: Array of results (either response or error).
+    ///   - delays: Optional array of delays for each result.
+    public func stubSequence<E: Endpoint>(
+        _ type: E.Type,
+        sequence: [Result<E.Response, NetworkError>],
+        delays: [TimeInterval] = []
+    ) {
+        let key = stubKey(for: type)
+        var responses: [Any] = []
+        var errors: [NetworkError?] = []
+
+        for result in sequence {
+            switch result {
+            case .success(let response):
+                responses.append(response)
+                errors.append(nil)
+            case .failure(let error):
+                responses.append(EmptyResponse()) // Placeholder
+                errors.append(error)
+            }
+        }
+
+        sequenceStubs[key] = SequenceStub(
+            responses: responses,
+            errors: errors,
+            delays: delays
+        )
+        stubs.removeValue(forKey: key)
+        errorStubs.removeValue(forKey: key)
+    }
+
     // MARK: - Call Tracking
 
     /// Returns the number of times an endpoint type was called.
@@ -78,6 +146,7 @@ public actor MockNetworkClient: NetworkClientProtocol {
         delays.removeAll()
         callCounts.removeAll()
         calledEndpoints.removeAll()
+        sequenceStubs.removeAll()
     }
 
     // MARK: - NetworkClientProtocol
@@ -93,6 +162,39 @@ public actor MockNetworkClient: NetworkClientProtocol {
         var endpoints = calledEndpoints[key] as! [E]
         endpoints.append(endpoint)
         calledEndpoints[key] = endpoints
+
+        // Check for sequence stub first
+        if var seqStub = sequenceStubs[key] {
+            let index = seqStub.currentIndex
+
+            // Check if sequence is exhausted
+            guard index < seqStub.responses.count else {
+                throw MockError.sequenceExhausted(endpoint: String(describing: E.self))
+            }
+
+            // Apply delay if configured for this index
+            if index < seqStub.delays.count {
+                let delay = seqStub.delays[index]
+                if delay > 0 {
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+            }
+
+            // Increment index for next call
+            seqStub.currentIndex += 1
+            sequenceStubs[key] = seqStub
+
+            // Check for error at this index
+            if let error = seqStub.errors[index] {
+                throw error
+            }
+
+            // Return response
+            guard let response = seqStub.responses[index] as? E.Response else {
+                throw MockError.noStubConfigured(endpoint: String(describing: E.self))
+            }
+            return response
+        }
 
         let stubClosure = stubs[key]
         let error = errorStubs[key]
@@ -127,11 +229,14 @@ public actor MockNetworkClient: NetworkClientProtocol {
 /// Errors specific to MockNetworkClient.
 public enum MockError: Error, LocalizedError {
     case noStubConfigured(endpoint: String)
+    case sequenceExhausted(endpoint: String)
 
     public var errorDescription: String? {
         switch self {
         case .noStubConfigured(let endpoint):
             return "No stub configured for endpoint: \(endpoint)"
+        case .sequenceExhausted(let endpoint):
+            return "Stub sequence exhausted for endpoint: \(endpoint)"
         }
     }
 }

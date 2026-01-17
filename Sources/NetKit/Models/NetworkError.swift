@@ -8,6 +8,7 @@ public enum NetworkError: Error, Sendable, Equatable {
     case unauthorized
     case forbidden
     case notFound
+    case noContent
     case serverError(statusCode: Int)
     case decodingError(Error)
     case encodingError(Error)
@@ -20,7 +21,8 @@ public enum NetworkError: Error, Sendable, Equatable {
              (.timeout, .timeout),
              (.unauthorized, .unauthorized),
              (.forbidden, .forbidden),
-             (.notFound, .notFound):
+             (.notFound, .notFound),
+             (.noContent, .noContent):
             return true
         case let (.serverError(lhsCode), .serverError(rhsCode)):
             return lhsCode == rhsCode

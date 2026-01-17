@@ -592,3 +592,260 @@ struct RequestBuilderTests {
         #expect(modified.additionalHeaders["X-Third"] == "third")
     }
 }
+
+// MARK: - Long Polling Test Helpers
+
+struct Message: Codable, Equatable, Sendable {
+    let id: String
+    let content: String
+}
+
+struct MessagesPollingEndpoint: LongPollingEndpoint {
+    var path: String { "/messages/poll" }
+    var method: HTTPMethod { .get }
+    var pollingTimeout: TimeInterval { 5 }
+    var retryInterval: TimeInterval { 0.1 }
+
+    typealias Response = [Message]
+}
+
+struct ConditionalPollingEndpoint: LongPollingEndpoint {
+    let stopAfterCount: Int
+    private(set) var receivedCount: Int = 0
+
+    var path: String { "/events" }
+    var method: HTTPMethod { .get }
+    var pollingTimeout: TimeInterval { 5 }
+    var retryInterval: TimeInterval { 0.1 }
+
+    typealias Response = String
+
+    func shouldContinuePolling(after response: String) -> Bool {
+        // Stop when we receive "STOP" message
+        response != "STOP"
+    }
+}
+
+// MARK: - LongPollingEndpoint Tests
+
+@Suite("LongPollingEndpoint Tests")
+struct LongPollingEndpointTests {
+    @Test("Default values are applied")
+    func defaults() {
+        struct MinimalPollingEndpoint: LongPollingEndpoint {
+            var path: String { "/poll" }
+            var method: HTTPMethod { .get }
+            typealias Response = String
+        }
+
+        let endpoint = MinimalPollingEndpoint()
+        #expect(endpoint.pollingTimeout == 30)
+        #expect(endpoint.retryInterval == 1)
+        #expect(endpoint.shouldContinuePolling(after: "any") == true)
+    }
+
+    @Test("Custom values override defaults")
+    func customValues() {
+        let endpoint = MessagesPollingEndpoint()
+        #expect(endpoint.pollingTimeout == 5)
+        #expect(endpoint.retryInterval == 0.1)
+    }
+
+    @Test("shouldContinuePolling can stop polling")
+    func conditionalStop() {
+        let endpoint = ConditionalPollingEndpoint(stopAfterCount: 3)
+        #expect(endpoint.shouldContinuePolling(after: "hello") == true)
+        #expect(endpoint.shouldContinuePolling(after: "world") == true)
+        #expect(endpoint.shouldContinuePolling(after: "STOP") == false)
+    }
+}
+
+// MARK: - LongPollingConfiguration Tests
+
+@Suite("LongPollingConfiguration Tests")
+struct LongPollingConfigurationTests {
+    @Test("Custom configuration")
+    func customConfig() {
+        let config = LongPollingConfiguration(
+            timeout: 45,
+            retryInterval: 2.5,
+            maxConsecutiveErrors: 10
+        )
+
+        #expect(config.timeout == 45)
+        #expect(config.retryInterval == 2.5)
+        #expect(config.maxConsecutiveErrors == 10)
+    }
+
+    @Test("Preset configurations")
+    func presets() {
+        #expect(LongPollingConfiguration.short.timeout == 10)
+        #expect(LongPollingConfiguration.short.retryInterval == 0.5)
+
+        #expect(LongPollingConfiguration.standard.timeout == 30)
+        #expect(LongPollingConfiguration.standard.retryInterval == 1)
+
+        #expect(LongPollingConfiguration.long.timeout == 60)
+        #expect(LongPollingConfiguration.long.retryInterval == 2)
+
+        #expect(LongPollingConfiguration.realtime.timeout == 15)
+        #expect(LongPollingConfiguration.realtime.retryInterval == 0.1)
+    }
+
+    @Test("Configuration is equatable")
+    func equatable() {
+        let config1 = LongPollingConfiguration(timeout: 30, retryInterval: 1)
+        let config2 = LongPollingConfiguration(timeout: 30, retryInterval: 1)
+        let config3 = LongPollingConfiguration(timeout: 60, retryInterval: 1)
+
+        #expect(config1 == config2)
+        #expect(config1 != config3)
+    }
+}
+
+// MARK: - LongPollingState Tests
+
+@Suite("LongPollingState Tests")
+struct LongPollingStateTests {
+    @Test("States are equatable")
+    func equatable() {
+        #expect(LongPollingState.idle == LongPollingState.idle)
+        #expect(LongPollingState.polling == LongPollingState.polling)
+        #expect(LongPollingState.cancelled == LongPollingState.cancelled)
+        #expect(LongPollingState.completed == LongPollingState.completed)
+        #expect(LongPollingState.waiting(retryIn: 1.0) == LongPollingState.waiting(retryIn: 1.0))
+        #expect(LongPollingState.waiting(retryIn: 1.0) != LongPollingState.waiting(retryIn: 2.0))
+        #expect(LongPollingState.failed(.timeout) == LongPollingState.failed(.timeout))
+        #expect(LongPollingState.failed(.timeout) != LongPollingState.failed(.noConnection))
+    }
+
+    @Test("Different states are not equal")
+    func inequality() {
+        #expect(LongPollingState.idle != LongPollingState.polling)
+        #expect(LongPollingState.polling != LongPollingState.cancelled)
+    }
+}
+
+// MARK: - MockNetworkClient Sequence Tests
+
+@Suite("MockNetworkClient Sequence Tests")
+struct MockNetworkClientSequenceTests {
+    @Test("Sequence stub returns responses in order")
+    func sequenceInOrder() async throws {
+        let client = MockNetworkClient()
+        let messages = [
+            [Message(id: "1", content: "First")],
+            [Message(id: "2", content: "Second")],
+            [Message(id: "3", content: "Third")]
+        ]
+
+        await client.stubSequence(MessagesPollingEndpoint.self, responses: messages)
+
+        let result1 = try await client.request(MessagesPollingEndpoint())
+        let result2 = try await client.request(MessagesPollingEndpoint())
+        let result3 = try await client.request(MessagesPollingEndpoint())
+
+        #expect(result1[0].content == "First")
+        #expect(result2[0].content == "Second")
+        #expect(result3[0].content == "Third")
+    }
+
+    @Test("Sequence stub throws when exhausted")
+    func sequenceExhausted() async throws {
+        let client = MockNetworkClient()
+        let messages = [[Message(id: "1", content: "Only one")]]
+
+        await client.stubSequence(MessagesPollingEndpoint.self, responses: messages)
+
+        _ = try await client.request(MessagesPollingEndpoint())
+
+        do {
+            _ = try await client.request(MessagesPollingEndpoint())
+            Issue.record("Expected error when sequence exhausted")
+        } catch let error as MockError {
+            if case .sequenceExhausted = error {
+                // Expected
+            } else {
+                Issue.record("Wrong error type: \(error)")
+            }
+        }
+    }
+
+    @Test("Sequence stub with mixed results")
+    func sequenceMixedResults() async throws {
+        let client = MockNetworkClient()
+        let sequence: [Result<[Message], NetworkError>] = [
+            .success([Message(id: "1", content: "Success")]),
+            .failure(.timeout),
+            .success([Message(id: "2", content: "After timeout")])
+        ]
+
+        await client.stubSequence(MessagesPollingEndpoint.self, sequence: sequence)
+
+        // First call succeeds
+        let result1 = try await client.request(MessagesPollingEndpoint())
+        #expect(result1[0].content == "Success")
+
+        // Second call fails with timeout
+        do {
+            _ = try await client.request(MessagesPollingEndpoint())
+            Issue.record("Expected timeout error")
+        } catch let error as NetworkError {
+            #expect(error == .timeout)
+        }
+
+        // Third call succeeds
+        let result3 = try await client.request(MessagesPollingEndpoint())
+        #expect(result3[0].content == "After timeout")
+    }
+
+    @Test("Sequence stub with delays")
+    func sequenceWithDelays() async throws {
+        let client = MockNetworkClient()
+        let messages = [
+            [Message(id: "1", content: "First")],
+            [Message(id: "2", content: "Second")]
+        ]
+
+        await client.stubSequence(
+            MessagesPollingEndpoint.self,
+            responses: messages,
+            delays: [0.1, 0.1]
+        )
+
+        let start = Date()
+        _ = try await client.request(MessagesPollingEndpoint())
+        _ = try await client.request(MessagesPollingEndpoint())
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(elapsed >= 0.2)
+    }
+
+    @Test("Sequence tracks call count")
+    func sequenceCallCount() async throws {
+        let client = MockNetworkClient()
+        let messages = [
+            [Message(id: "1", content: "First")],
+            [Message(id: "2", content: "Second")]
+        ]
+
+        await client.stubSequence(MessagesPollingEndpoint.self, responses: messages)
+
+        _ = try await client.request(MessagesPollingEndpoint())
+        _ = try await client.request(MessagesPollingEndpoint())
+
+        let count = await client.callCount(for: MessagesPollingEndpoint.self)
+        #expect(count == 2)
+    }
+}
+
+// MARK: - NetworkError NoContent Tests
+
+@Suite("NetworkError NoContent Tests")
+struct NetworkErrorNoContentTests {
+    @Test("NoContent error is equatable")
+    func noContentEquatable() {
+        #expect(NetworkError.noContent == NetworkError.noContent)
+        #expect(NetworkError.noContent != NetworkError.notFound)
+    }
+}

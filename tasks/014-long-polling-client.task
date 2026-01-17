@@ -1,0 +1,33 @@
+# Task: Long Polling Client Extension
+
+## Objective
+Extend `NetworkClient` with a `poll()` method that handles the long polling loop, managing reconnections and yielding results via AsyncSequence.
+
+## Context
+- Related files: `Sources/NetKit/Core/NetworkClient.swift`, `Sources/NetKit/LongPolling/LongPollingEndpoint.swift`
+- Dependencies: Task 013 (LongPollingEndpoint protocol)
+- Branch: feature/long-polling
+
+## Steps
+1. [x] Create `Sources/NetKit/LongPolling/LongPollingStream.swift`
+2. [x] Implement `LongPollingStream<E: LongPollingEndpoint>: AsyncSequence`
+   - Yields `E.Response` values as they arrive
+   - Handles automatic reconnection on timeout/empty response
+   - Supports cancellation via Task cancellation
+3. [x] Add `poll<E: LongPollingEndpoint>(_ endpoint: E) -> LongPollingStream<E>` to NetworkClient
+4. [x] Handle special status codes:
+   - 204 No Content: Continue polling
+   - 408 Request Timeout: Reconnect immediately
+   - 5xx: Apply retry policy if configured
+5. [x] Add `stopPolling()` method or use structured concurrency (via Task cancellation)
+
+## Acceptance Criteria
+- [x] Can iterate over responses with `for await response in client.poll(endpoint)`
+- [x] Automatically reconnects on timeout
+- [x] Respects Task cancellation
+- [x] Applies interceptors to each poll request
+
+## Notes
+- Use AsyncStream internally for yielding values
+- Consider connection reuse via URLSession configuration
+- Extended timeout should not affect other requests
