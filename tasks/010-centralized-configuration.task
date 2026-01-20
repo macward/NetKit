@@ -1,0 +1,30 @@
+# Task: Centralized Configuration
+
+Status: pending
+
+## Objective
+Crear NetworkConfiguration struct que centralice toda la configuración del cliente en un solo lugar.
+
+## Context
+- Related files: Sources/NetKit/Core/NetworkClient.swift
+- Dependencies: 001, 003, 006, 008 (usa tipos de esas tasks)
+
+## Steps
+1. [ ] Crear struct NetworkConfiguration con todos los parámetros
+2. [ ] Agregar defaults sensatos para cada campo
+3. [ ] Crear NetworkConfiguration.Builder para construcción fluida
+4. [ ] Agregar presets (minimal, development, production)
+5. [ ] Actualizar NetworkClient init para aceptar configuration
+6. [ ] Mantener init actual como convenience que crea config internamente
+7. [ ] Documentar cada opción de configuración
+
+## Acceptance Criteria
+- [ ] Toda la config en un solo struct
+- [ ] Builder pattern funciona para construcción incremental
+- [ ] Presets cubren casos de uso comunes
+- [ ] Backward compatible con init actual
+- [ ] Tests verifican diferentes configuraciones
+
+## Notes
+- Esta task depende de otras para tener todos los tipos necesarios
+- Considerar validation de configuración

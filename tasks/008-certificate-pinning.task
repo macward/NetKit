@@ -1,0 +1,30 @@
+# Task: Certificate Pinning
+
+Status: pending
+
+## Objective
+Implementar SSL/TLS certificate pinning para prevenir ataques man-in-the-middle.
+
+## Context
+- Related files: Sources/NetKit/Core/NetworkClient.swift
+- Dependencies: none
+
+## Steps
+1. [ ] Crear enum SecurityPolicy (default, pinned, disabled)
+2. [ ] Crear struct PinnedCertificate con hash del certificado
+3. [ ] Implementar URLSessionDelegate para validación de certificados
+4. [ ] Soportar pin por public key (más flexible que certificate completo)
+5. [ ] Agregar fallback certificates para rotación
+6. [ ] Implementar certificate validation failure reporting
+7. [ ] Documentar proceso de extracción de certificate hash
+
+## Acceptance Criteria
+- [ ] Requests fallan si certificado no coincide con pin
+- [ ] Public key pinning funciona correctamente
+- [ ] Rotación de certificados soportada con fallbacks
+- [ ] Error claro cuando pinning falla
+- [ ] Tests verifican que invalid certs son rechazados
+
+## Notes
+- Incluir guía para obtener certificate pins de producción
+- Considerar debug mode que bypassa pinning

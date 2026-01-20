@@ -1,0 +1,30 @@
+# Task: HTTP Cache Headers Support
+
+Status: pending
+
+## Objective
+Implementar soporte para headers HTTP de cache (Cache-Control, ETag, Last-Modified, Expires) en ResponseCache para respetar las directivas del servidor.
+
+## Context
+- Related files: Sources/NetKit/Cache/ResponseCache.swift, Sources/NetKit/Core/NetworkClient.swift
+- Dependencies: none
+
+## Steps
+1. [ ] Crear protocolo CachePolicy con métodos shouldCache, ttl, y invalidationRules
+2. [ ] Parsear header Cache-Control (max-age, no-cache, no-store, private, public)
+3. [ ] Implementar soporte para ETag y conditional requests (If-None-Match)
+4. [ ] Implementar soporte para Last-Modified y If-Modified-Since
+5. [ ] Parsear header Expires como fallback
+6. [ ] Hacer TTL configurable por endpoint (remover hardcode de 300s)
+7. [ ] Actualizar NetworkClient para usar las nuevas políticas
+
+## Acceptance Criteria
+- [ ] Cache respeta Cache-Control: no-store (no cachea)
+- [ ] Cache respeta Cache-Control: max-age
+- [ ] Conditional requests funcionan con ETag
+- [ ] TTL es configurable por endpoint
+- [ ] Tests cubren todos los escenarios de cache headers
+
+## Notes
+- Mantener backward compatibility con el cache actual
+- Considerar cache revalidation (stale-while-revalidate)

@@ -1,0 +1,30 @@
+# Task: Mock Network Conditions Simulation
+
+Status: pending
+
+## Objective
+Mejorar MockNetworkClient para simular condiciones de red reales (latencia, packet loss, throttling).
+
+## Context
+- Related files: Sources/NetKit/Mock/MockNetworkClient.swift
+- Dependencies: none
+
+## Steps
+1. [ ] Crear enum NetworkCondition (wifi, 4g, 3g, edge, offline)
+2. [ ] Implementar delay configurable por condition
+3. [ ] Agregar simulación de packet loss (failure rate %)
+4. [ ] Implementar throttling de bandwidth
+5. [ ] Agregar response delay por endpoint específico
+6. [ ] Crear presets de condiciones comunes
+7. [ ] Implementar transiciones entre condiciones (wifi -> offline)
+
+## Acceptance Criteria
+- [ ] Mock puede simular latencia realista
+- [ ] Packet loss causa failures intermitentes
+- [ ] Condiciones son configurables por test
+- [ ] Presets cubren escenarios comunes
+- [ ] Tests demuestran uso de condiciones
+
+## Notes
+- Útil para testing de retry logic y offline handling
+- Considerar integration con XCTest para UI tests

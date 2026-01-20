@@ -1,0 +1,30 @@
+# Task: Typed HTTP Status Codes
+
+Status: pending
+
+## Objective
+Crear enum HTTPStatusCode tipado para reemplazar Int crudo, con helpers para categorización de responses.
+
+## Context
+- Related files: Sources/NetKit/Models/
+- Dependencies: none
+
+## Steps
+1. [ ] Crear enum HTTPStatusCode con RawValue Int
+2. [ ] Agregar cases para códigos comunes (2xx, 4xx, 5xx)
+3. [ ] Implementar propiedades isSuccess, isClientError, isServerError, isRedirect
+4. [ ] Agregar init(rawValue:) que maneje códigos desconocidos
+5. [ ] Integrar con NetworkError para errores tipados
+6. [ ] Actualizar NetworkClient para usar HTTPStatusCode
+7. [ ] Agregar CustomStringConvertible con descripciones útiles
+
+## Acceptance Criteria
+- [ ] Todos los status codes comunes tienen cases explícitos
+- [ ] Códigos desconocidos se manejan gracefully
+- [ ] Helpers de categorización funcionan correctamente
+- [ ] Integrado con el resto del sistema
+- [ ] Tests cubren edge cases
+
+## Notes
+- Considerar conformance a CaseIterable para codes conocidos
+- Mantener backward compatibility con código que use Int

@@ -1,0 +1,31 @@
+# Task: WebSocket Support
+
+Status: pending
+
+## Objective
+Agregar soporte para conexiones WebSocket como alternativa más eficiente a long polling.
+
+## Context
+- Related files: Sources/NetKit/LongPolling/
+- Dependencies: none
+
+## Steps
+1. [ ] Crear protocolo WebSocketEndpoint (path, onMessage, onError, onClose)
+2. [ ] Implementar WebSocketConnection actor usando URLSessionWebSocketTask
+3. [ ] Crear AsyncStream para recibir mensajes
+4. [ ] Implementar reconexión automática con backoff
+5. [ ] Agregar soporte para ping/pong heartbeat
+6. [ ] Implementar send message con diferentes tipos (text, binary)
+7. [ ] Integrar con interceptors para auth headers
+8. [ ] Documentar uso y diferencias vs long polling
+
+## Acceptance Criteria
+- [ ] Conexión WebSocket funciona end-to-end
+- [ ] Mensajes se reciben via AsyncStream
+- [ ] Reconexión automática funciona
+- [ ] Auth headers se envían en handshake
+- [ ] Tests cubren connect, message, disconnect
+
+## Notes
+- URLSessionWebSocketTask disponible desde iOS 13
+- Considerar abstracción que permita switch entre WS y long polling

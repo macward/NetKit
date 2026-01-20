@@ -1,0 +1,31 @@
+# Task: Enhanced NetworkError with Context
+
+Status: pending
+
+## Objective
+Mejorar NetworkError para incluir contexto completo del request/response, facilitando debugging y observabilidad.
+
+## Context
+- Related files: Sources/NetKit/Models/NetworkError.swift, Sources/NetKit/Core/NetworkClient.swift
+- Dependencies: none
+
+## Steps
+1. [ ] Crear RequestSnapshot struct (URL, method, headers sanitizados, body size)
+2. [ ] Crear ResponseSnapshot struct (statusCode, headers, body preview)
+3. [ ] Refactorizar NetworkError como struct con ErrorKind enum
+4. [ ] Agregar campos: timestamp, retryAttempt, underlyingError
+5. [ ] Crear ErrorKind cases específicos (timeout, rateLimited, gatewayTimeout, etc.)
+6. [ ] Implementar sanitización de headers sensibles en snapshots
+7. [ ] Actualizar todos los throw sites en NetworkClient
+8. [ ] Mantener Equatable de forma robusta (no basado en localizedDescription)
+
+## Acceptance Criteria
+- [ ] NetworkError incluye request context (URL, method)
+- [ ] NetworkError incluye response context cuando disponible
+- [ ] Headers sensibles (Authorization, API keys) están sanitizados
+- [ ] ErrorKind distingue entre diferentes tipos de server errors
+- [ ] Tests verifican contexto en errores
+
+## Notes
+- No incluir body completo en snapshot (solo tamaño o preview truncado)
+- Considerar conformance a LocalizedError para mensajes útiles

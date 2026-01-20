@@ -1,0 +1,30 @@
+# Task: Request Deduplication
+
+Status: pending
+
+## Objective
+Implementar deduplicación de requests para evitar múltiples llamadas idénticas simultáneas, reutilizando el resultado de la primera.
+
+## Context
+- Related files: Sources/NetKit/Core/NetworkClient.swift
+- Dependencies: none
+
+## Steps
+1. [ ] Crear RequestKey hashable (URL, method, headers relevantes, body hash)
+2. [ ] Crear actor InFlightRequestTracker para manejar requests en curso
+3. [ ] Almacenar Task<Response, Error> por RequestKey
+4. [ ] Antes de ejecutar request, verificar si ya existe uno idéntico en curso
+5. [ ] Si existe, await el Task existente en vez de crear nuevo request
+6. [ ] Limpiar entry cuando el request complete (success o failure)
+7. [ ] Hacer deduplication configurable (opt-in/opt-out por endpoint)
+
+## Acceptance Criteria
+- [ ] 10 requests idénticos simultáneos ejecutan solo 1 request real
+- [ ] Todos los callers reciben el mismo resultado
+- [ ] Requests con bodies diferentes no se deduplican
+- [ ] Deduplication es thread-safe
+- [ ] Tests verifican comportamiento con concurrent requests
+
+## Notes
+- Solo aplicar a requests GET por defecto (mutations no deberían deduplicarse)
+- Considerar TTL corto para evitar stale results

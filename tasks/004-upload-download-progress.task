@@ -1,0 +1,30 @@
+# Task: Upload/Download Progress Tracking
+
+Status: pending
+
+## Objective
+Agregar soporte para tracking de progreso en uploads y downloads usando URLSession delegates y AsyncStream.
+
+## Context
+- Related files: Sources/NetKit/Core/NetworkClient.swift
+- Dependencies: none
+
+## Steps
+1. [ ] Crear Progress struct (bytesCompleted, totalBytes, fractionCompleted)
+2. [ ] Crear ProgressTrackingDelegate que implemente URLSessionTaskDelegate
+3. [ ] Implementar método upload(file:to:progress:) que retorna AsyncStream<Progress>
+4. [ ] Implementar método download(from:to:progress:) que retorna AsyncStream<Progress>
+5. [ ] Crear MultipartFormData builder para uploads multipart
+6. [ ] Integrar con retry policy (reiniciar progreso en retry)
+7. [ ] Documentar uso con ejemplos
+
+## Acceptance Criteria
+- [ ] Upload muestra progreso en tiempo real
+- [ ] Download muestra progreso en tiempo real
+- [ ] MultipartFormData soporta archivos y campos
+- [ ] Progress stream se cancela correctamente
+- [ ] Tests verifican progreso incremental
+
+## Notes
+- Usar URLSessionUploadTask y URLSessionDownloadTask
+- Considerar background transfers para v2

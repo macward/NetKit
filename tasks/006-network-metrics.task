@@ -1,0 +1,30 @@
+# Task: Network Metrics and Telemetry
+
+Status: pending
+
+## Objective
+Agregar sistema de métricas para tracking de request duration, success/failure rates, y integración con sistemas de analytics.
+
+## Context
+- Related files: Sources/NetKit/Core/NetworkClient.swift
+- Dependencies: none
+
+## Steps
+1. [ ] Crear protocolo NetworkMetrics con método recordRequest
+2. [ ] Definir RequestMetric struct (endpoint, method, duration, statusCode, error, timestamp)
+3. [ ] Implementar medición de request duration en NetworkClient
+4. [ ] Crear DefaultNetworkMetrics que loggea a console (para desarrollo)
+5. [ ] Hacer NetworkMetrics inyectable en NetworkClient
+6. [ ] Agregar hooks para integración con third parties (Firebase, DataDog, Sentry)
+7. [ ] Implementar agregación básica (average latency, error rate)
+
+## Acceptance Criteria
+- [ ] Cada request registra duration, status, y resultado
+- [ ] Métricas incluyen información del endpoint
+- [ ] Sistema es extensible para diferentes backends de analytics
+- [ ] No impacta performance significativamente
+- [ ] Tests verifican que métricas se registran correctamente
+
+## Notes
+- Usar URLSessionTaskMetrics para datos precisos de timing
+- Considerar sampling para apps de alto tráfico

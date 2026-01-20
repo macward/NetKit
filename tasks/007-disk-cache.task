@@ -1,0 +1,31 @@
+# Task: Disk Cache Implementation
+
+Status: pending
+
+## Objective
+Implementar cache en disco como complemento al cache en memoria, con políticas de eviction y límites de tamaño.
+
+## Context
+- Related files: Sources/NetKit/Cache/ResponseCache.swift
+- Dependencies: 001-http-cache-headers.task
+
+## Steps
+1. [ ] Crear enum CacheStorage (memory, disk, hybrid)
+2. [ ] Implementar DiskCache actor con FileManager
+3. [ ] Definir estructura de archivos en cache directory
+4. [ ] Implementar límite de tamaño con eviction LRU real
+5. [ ] Agregar metadata file para tracking de entries
+6. [ ] Implementar hybrid cache (memory first, disk fallback)
+7. [ ] Agregar migración de cache entre versiones
+8. [ ] Implementar cache clearing (por endpoint, por edad, total)
+
+## Acceptance Criteria
+- [ ] Cache persiste entre sesiones de app
+- [ ] Límite de tamaño se respeta
+- [ ] Eviction LRU funciona correctamente
+- [ ] Hybrid cache usa memoria para hot data
+- [ ] Tests verifican persistencia y eviction
+
+## Notes
+- Usar Caches directory para que iOS pueda limpiar si necesita espacio
+- Considerar encryption para datos sensibles
