@@ -849,3 +849,677 @@ struct NetworkErrorNoContentTests {
         #expect(NetworkError.noContent != NetworkError.notFound)
     }
 }
+
+// MARK: - CacheControlParser Tests
+
+@Suite("CacheControlParser Tests")
+struct CacheControlParserTests {
+    @Test("Parses max-age directive")
+    func parsesMaxAge() {
+        let result = CacheControlParser.parse("max-age=3600")
+
+        #expect(result?.maxAge == 3600)
+        #expect(result?.noCache == false)
+        #expect(result?.noStore == false)
+    }
+
+    @Test("Parses no-cache directive")
+    func parsesNoCache() {
+        let result = CacheControlParser.parse("no-cache")
+
+        #expect(result?.noCache == true)
+        #expect(result?.maxAge == nil)
+    }
+
+    @Test("Parses no-store directive")
+    func parsesNoStore() {
+        let result = CacheControlParser.parse("no-store")
+
+        #expect(result?.noStore == true)
+    }
+
+    @Test("Parses private directive")
+    func parsesPrivate() {
+        let result = CacheControlParser.parse("private")
+
+        #expect(result?.isPrivate == true)
+        #expect(result?.isPublic == false)
+    }
+
+    @Test("Parses public directive")
+    func parsesPublic() {
+        let result = CacheControlParser.parse("public")
+
+        #expect(result?.isPublic == true)
+        #expect(result?.isPrivate == false)
+    }
+
+    @Test("Parses must-revalidate directive")
+    func parsesMustRevalidate() {
+        let result = CacheControlParser.parse("must-revalidate")
+
+        #expect(result?.mustRevalidate == true)
+    }
+
+    @Test("Parses immutable directive")
+    func parsesImmutable() {
+        let result = CacheControlParser.parse("immutable")
+
+        #expect(result?.immutable == true)
+    }
+
+    @Test("Parses stale-while-revalidate directive")
+    func parsesStaleWhileRevalidate() {
+        let result = CacheControlParser.parse("stale-while-revalidate=60")
+
+        #expect(result?.staleWhileRevalidate == 60)
+    }
+
+    @Test("Parses stale-if-error directive")
+    func parsesStaleIfError() {
+        let result = CacheControlParser.parse("stale-if-error=300")
+
+        #expect(result?.staleIfError == 300)
+    }
+
+    @Test("Parses s-maxage directive")
+    func parsesSMaxAge() {
+        let result = CacheControlParser.parse("s-maxage=7200")
+
+        #expect(result?.sharedMaxAge == 7200)
+    }
+
+    @Test("Parses multiple directives")
+    func parsesMultipleDirectives() {
+        let result = CacheControlParser.parse("public, max-age=3600, must-revalidate")
+
+        #expect(result?.isPublic == true)
+        #expect(result?.maxAge == 3600)
+        #expect(result?.mustRevalidate == true)
+    }
+
+    @Test("Handles whitespace correctly")
+    func handlesWhitespace() {
+        let result = CacheControlParser.parse("  max-age=3600  ,  no-cache  ")
+
+        #expect(result?.maxAge == 3600)
+        #expect(result?.noCache == true)
+    }
+
+    @Test("Returns nil for empty string")
+    func returnsNilForEmptyString() {
+        let result = CacheControlParser.parse("")
+
+        #expect(result == nil)
+    }
+
+    @Test("Returns nil for nil input")
+    func returnsNilForNilInput() {
+        let result = CacheControlParser.parse(nil)
+
+        #expect(result == nil)
+    }
+
+    @Test("Case insensitive parsing")
+    func caseInsensitive() {
+        let result = CacheControlParser.parse("MAX-AGE=3600, NO-CACHE")
+
+        #expect(result?.maxAge == 3600)
+        #expect(result?.noCache == true)
+    }
+}
+
+// MARK: - HTTPDateParser Tests
+
+@Suite("HTTPDateParser Tests")
+struct HTTPDateParserTests {
+    @Test("Parses RFC 1123 format")
+    func parsesRFC1123() {
+        let dateString: String = "Sun, 06 Nov 1994 08:49:37 GMT"
+        let date: Date? = HTTPDateParser.parse(dateString)
+
+        #expect(date != nil)
+
+        let calendar: Calendar = Calendar(identifier: .gregorian)
+        let components: DateComponents = calendar.dateComponents(in: TimeZone(identifier: "GMT")!, from: date!)
+        #expect(components.year == 1994)
+        #expect(components.month == 11)
+        #expect(components.day == 6)
+    }
+
+    @Test("Parses RFC 850 format")
+    func parsesRFC850() {
+        let dateString: String = "Sunday, 06-Nov-94 08:49:37 GMT"
+        let date: Date? = HTTPDateParser.parse(dateString)
+
+        #expect(date != nil)
+    }
+
+    @Test("Parses asctime format")
+    func parsesAsctime() {
+        let dateString: String = "Sun Nov  6 08:49:37 1994"
+        let date: Date? = HTTPDateParser.parse(dateString)
+
+        #expect(date != nil)
+    }
+
+    @Test("Returns nil for invalid format")
+    func returnsNilForInvalid() {
+        let date: Date? = HTTPDateParser.parse("invalid date")
+
+        #expect(date == nil)
+    }
+
+    @Test("Returns nil for nil input")
+    func returnsNilForNil() {
+        let date: Date? = HTTPDateParser.parse(nil)
+
+        #expect(date == nil)
+    }
+
+    @Test("Formats date as RFC 1123")
+    func formatsAsRFC1123() {
+        let components: DateComponents = DateComponents(
+            calendar: Calendar(identifier: .gregorian),
+            timeZone: TimeZone(identifier: "GMT"),
+            year: 1994,
+            month: 11,
+            day: 6,
+            hour: 8,
+            minute: 49,
+            second: 37
+        )
+        let date: Date = components.date!
+        let formatted: String = HTTPDateParser.format(date)
+
+        #expect(formatted == "Sun, 06 Nov 1994 08:49:37 GMT")
+    }
+}
+
+// MARK: - CacheMetadata Tests
+
+@Suite("CacheMetadata Tests")
+struct CacheMetadataTests {
+    @Test("isExpired returns true when past expiresAt")
+    func isExpiredWhenPast() {
+        let metadata: CacheMetadata = CacheMetadata(
+            cachedAt: Date().addingTimeInterval(-100),
+            expiresAt: Date().addingTimeInterval(-10)
+        )
+
+        #expect(metadata.isExpired == true)
+    }
+
+    @Test("isExpired returns false when before expiresAt")
+    func isNotExpiredWhenFuture() {
+        let metadata: CacheMetadata = CacheMetadata(
+            cachedAt: Date(),
+            expiresAt: Date().addingTimeInterval(100)
+        )
+
+        #expect(metadata.isExpired == false)
+    }
+
+    @Test("isExpired returns false when expiresAt is nil")
+    func isNotExpiredWhenNil() {
+        let metadata: CacheMetadata = CacheMetadata(
+            cachedAt: Date(),
+            expiresAt: nil
+        )
+
+        #expect(metadata.isExpired == false)
+    }
+
+    @Test("requiresRevalidation when noCache is true")
+    func requiresRevalidationNoCache() {
+        let cacheControl: CacheControlDirective = CacheControlDirective(noCache: true)
+        let metadata: CacheMetadata = CacheMetadata(
+            cachedAt: Date(),
+            cacheControl: cacheControl
+        )
+
+        #expect(metadata.requiresRevalidation == true)
+    }
+
+    @Test("requiresRevalidation when mustRevalidate is true")
+    func requiresRevalidationMustRevalidate() {
+        let cacheControl: CacheControlDirective = CacheControlDirective(mustRevalidate: true)
+        let metadata: CacheMetadata = CacheMetadata(
+            cachedAt: Date(),
+            cacheControl: cacheControl
+        )
+
+        #expect(metadata.requiresRevalidation == true)
+    }
+
+    @Test("isStaleButRevalidatable within window")
+    func staleWithinWindow() {
+        let metadata: CacheMetadata = CacheMetadata(
+            cachedAt: Date().addingTimeInterval(-100),
+            expiresAt: Date().addingTimeInterval(-10)
+        )
+
+        #expect(metadata.isStaleButRevalidatable(within: 60) == true)
+        #expect(metadata.isStaleButRevalidatable(within: 5) == false)
+    }
+}
+
+// MARK: - HTTPCachePolicy Tests
+
+@Suite("HTTPCachePolicy Tests")
+struct HTTPCachePolicyTests {
+    @Test("shouldCache returns false for no-store")
+    func noStorePreventsCache() {
+        let policy: HTTPCachePolicy = HTTPCachePolicy()
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Cache-Control": "no-store"]
+        )!
+
+        #expect(policy.shouldCache(response: response) == false)
+    }
+
+    @Test("shouldCache returns true for cacheable status codes")
+    func cacheableStatusCodes() {
+        let policy: HTTPCachePolicy = HTTPCachePolicy()
+        let cacheableCodes: [Int] = [200, 203, 301, 404]
+
+        for code in cacheableCodes {
+            let response: HTTPURLResponse = HTTPURLResponse(
+                url: URL(string: "https://example.com")!,
+                statusCode: code,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            #expect(policy.shouldCache(response: response) == true)
+        }
+    }
+
+    @Test("shouldCache returns false for non-cacheable status codes")
+    func nonCacheableStatusCodes() {
+        let policy: HTTPCachePolicy = HTTPCachePolicy()
+        let nonCacheableCodes: [Int] = [201, 302, 400, 500]
+
+        for code in nonCacheableCodes {
+            let response: HTTPURLResponse = HTTPURLResponse(
+                url: URL(string: "https://example.com")!,
+                statusCode: code,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            #expect(policy.shouldCache(response: response) == false)
+        }
+    }
+
+    @Test("ttl uses max-age from Cache-Control")
+    func ttlFromMaxAge() {
+        let policy: HTTPCachePolicy = HTTPCachePolicy()
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Cache-Control": "max-age=3600"]
+        )!
+
+        #expect(policy.ttl(for: response) == 3600)
+    }
+
+    @Test("ttl uses Expires header as fallback")
+    func ttlFromExpires() {
+        let policy: HTTPCachePolicy = HTTPCachePolicy()
+        let futureDate: Date = Date().addingTimeInterval(1800)
+        let expiresString: String = HTTPDateParser.format(futureDate)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Expires": expiresString]
+        )!
+
+        let ttl: TimeInterval? = policy.ttl(for: response)
+        #expect(ttl != nil)
+        #expect(ttl! > 1700 && ttl! < 1900)
+    }
+
+    @Test("ttl uses defaultTTL when no headers")
+    func ttlDefaultFallback() {
+        let policy: HTTPCachePolicy = HTTPCachePolicy(defaultTTL: 600)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        #expect(policy.ttl(for: response) == 600)
+    }
+
+    @Test("ttl returns nil when no headers and no default")
+    func ttlReturnsNilWhenNoInfo() {
+        let policy: HTTPCachePolicy = HTTPCachePolicy(defaultTTL: 0)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        #expect(policy.ttl(for: response) == nil)
+    }
+}
+
+// MARK: - ResponseCache HTTP Headers Tests
+
+@Suite("ResponseCache HTTP Headers Tests")
+struct ResponseCacheHTTPHeadersTests {
+    @Test("Store respects no-store directive")
+    func storeRespectsNoStore() async {
+        let cache: ResponseCache = ResponseCache()
+        let request: URLRequest = URLRequest(url: URL(string: "https://example.com/test")!)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com/test")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Cache-Control": "no-store"]
+        )!
+        let data: Data = "test".data(using: .utf8)!
+
+        let stored: Bool = await cache.store(data: data, for: request, response: response)
+
+        #expect(stored == false)
+        #expect(await cache.count == 0)
+    }
+
+    @Test("Store caches with max-age")
+    func storeCachesWithMaxAge() async {
+        let cache: ResponseCache = ResponseCache()
+        let request: URLRequest = URLRequest(url: URL(string: "https://example.com/test")!)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com/test")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Cache-Control": "max-age=3600"]
+        )!
+        let data: Data = "test".data(using: .utf8)!
+
+        let stored: Bool = await cache.store(data: data, for: request, response: response)
+
+        #expect(stored == true)
+        #expect(await cache.count == 1)
+    }
+
+    @Test("retrieveWithMetadata returns fresh for valid entry")
+    func retrieveWithMetadataFresh() async {
+        let cache: ResponseCache = ResponseCache()
+        let request: URLRequest = URLRequest(url: URL(string: "https://example.com/test")!)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com/test")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Cache-Control": "max-age=3600", "ETag": "\"abc123\""]
+        )!
+        let data: Data = "test".data(using: .utf8)!
+
+        await cache.store(data: data, for: request, response: response)
+        let result: CacheRetrievalResult = await cache.retrieveWithMetadata(for: request)
+
+        if case .fresh(let retrievedData, let metadata) = result {
+            #expect(retrievedData == data)
+            #expect(metadata.etag == "\"abc123\"")
+        } else {
+            Issue.record("Expected fresh result")
+        }
+    }
+
+    @Test("retrieveWithMetadata returns needsRevalidation for no-cache")
+    func retrieveWithMetadataNeedsRevalidation() async {
+        let cache: ResponseCache = ResponseCache()
+        let request: URLRequest = URLRequest(url: URL(string: "https://example.com/test")!)
+        let data: Data = "test".data(using: .utf8)!
+
+        await cache.store(data: data, for: request, ttl: 3600)
+
+        let result: CacheRetrievalResult = await cache.retrieveWithMetadata(for: request)
+
+        if case .fresh(let retrievedData, _) = result {
+            #expect(retrievedData == data)
+        } else {
+            Issue.record("Expected fresh result for TTL-based cache")
+        }
+    }
+
+    @Test("retrieveWithMetadata returns miss for non-existent entry")
+    func retrieveWithMetadataMiss() async {
+        let cache: ResponseCache = ResponseCache()
+        let request: URLRequest = URLRequest(url: URL(string: "https://example.com/missing")!)
+
+        let result: CacheRetrievalResult = await cache.retrieveWithMetadata(for: request)
+
+        if case .miss = result {
+            // Expected
+        } else {
+            Issue.record("Expected miss result")
+        }
+    }
+
+    @Test("metadata returns stored metadata")
+    func metadataReturnsStored() async {
+        let cache: ResponseCache = ResponseCache()
+        let request: URLRequest = URLRequest(url: URL(string: "https://example.com/test")!)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com/test")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: [
+                "Cache-Control": "max-age=3600",
+                "ETag": "\"abc123\"",
+                "Last-Modified": "Sun, 06 Nov 1994 08:49:37 GMT"
+            ]
+        )!
+
+        await cache.store(data: Data(), for: request, response: response)
+        let metadata: CacheMetadata? = await cache.metadata(for: request)
+
+        #expect(metadata != nil)
+        #expect(metadata?.etag == "\"abc123\"")
+        #expect(metadata?.lastModified == "Sun, 06 Nov 1994 08:49:37 GMT")
+    }
+
+    @Test("updateAfterRevalidation refreshes entry")
+    func updateAfterRevalidation() async {
+        let cache: ResponseCache = ResponseCache()
+        let request: URLRequest = URLRequest(url: URL(string: "https://example.com/test")!)
+        let initialResponse: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com/test")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Cache-Control": "max-age=100", "ETag": "\"old\""]
+        )!
+        let data: Data = "test".data(using: .utf8)!
+
+        await cache.store(data: data, for: request, response: initialResponse)
+
+        let revalidationResponse: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://example.com/test")!,
+            statusCode: 304,
+            httpVersion: nil,
+            headerFields: ["Cache-Control": "max-age=3600", "ETag": "\"new\""]
+        )!
+
+        await cache.updateAfterRevalidation(for: request, response: revalidationResponse)
+
+        let metadata: CacheMetadata? = await cache.metadata(for: request)
+        #expect(metadata?.etag == "\"new\"")
+    }
+}
+
+// MARK: - EndpointCachePolicy Tests
+
+@Suite("EndpointCachePolicy Tests")
+struct EndpointCachePolicyTests {
+    struct NoCacheEndpoint: Endpoint {
+        var path: String { "/no-cache" }
+        var method: HTTPMethod { .get }
+        var cachePolicy: EndpointCachePolicy { .noCache }
+        typealias Response = String
+    }
+
+    struct AlwaysCacheEndpoint: Endpoint {
+        var path: String { "/always-cache" }
+        var method: HTTPMethod { .get }
+        var cachePolicy: EndpointCachePolicy { .always(ttl: 600) }
+        typealias Response = String
+    }
+
+    struct OverrideTTLEndpoint: Endpoint {
+        var path: String { "/override-ttl" }
+        var method: HTTPMethod { .get }
+        var cachePolicy: EndpointCachePolicy { .overrideTTL(1800) }
+        typealias Response = String
+    }
+
+    struct DefaultEndpoint: Endpoint {
+        var path: String { "/default" }
+        var method: HTTPMethod { .get }
+        typealias Response = String
+    }
+
+    @Test("Default endpoint uses respectHeaders policy")
+    func defaultUsesRespectHeaders() {
+        let endpoint: DefaultEndpoint = DefaultEndpoint()
+
+        if case .respectHeaders = endpoint.cachePolicy {
+            // Expected
+        } else {
+            Issue.record("Expected respectHeaders policy")
+        }
+    }
+
+    @Test("noCache policy is set correctly")
+    func noCachePolicySet() {
+        let endpoint: NoCacheEndpoint = NoCacheEndpoint()
+
+        if case .noCache = endpoint.cachePolicy {
+            // Expected
+        } else {
+            Issue.record("Expected noCache policy")
+        }
+    }
+
+    @Test("always policy includes TTL")
+    func alwaysPolicyWithTTL() {
+        let endpoint: AlwaysCacheEndpoint = AlwaysCacheEndpoint()
+
+        if case .always(let ttl) = endpoint.cachePolicy {
+            #expect(ttl == 600)
+        } else {
+            Issue.record("Expected always policy")
+        }
+    }
+
+    @Test("overrideTTL policy includes TTL")
+    func overrideTTLPolicyWithTTL() {
+        let endpoint: OverrideTTLEndpoint = OverrideTTLEndpoint()
+
+        if case .overrideTTL(let ttl) = endpoint.cachePolicy {
+            #expect(ttl == 1800)
+        } else {
+            Issue.record("Expected overrideTTL policy")
+        }
+    }
+
+    @Test("Default cacheTTL is nil")
+    func defaultCacheTTLIsNil() {
+        let endpoint: DefaultEndpoint = DefaultEndpoint()
+
+        #expect(endpoint.cacheTTL == nil)
+    }
+}
+
+// MARK: - CacheRetrievalResult Tests
+
+@Suite("CacheRetrievalResult Tests")
+struct CacheRetrievalResultTests {
+    @Test("data property returns data for all cases except miss")
+    func dataProperty() {
+        let testData: Data = "test".data(using: .utf8)!
+        let metadata: CacheMetadata = CacheMetadata(cachedAt: Date())
+
+        let fresh: CacheRetrievalResult = .fresh(testData, metadata)
+        let stale: CacheRetrievalResult = .stale(testData, metadata)
+        let needsRevalidation: CacheRetrievalResult = .needsRevalidation(testData, metadata)
+        let miss: CacheRetrievalResult = .miss
+
+        #expect(fresh.data == testData)
+        #expect(stale.data == testData)
+        #expect(needsRevalidation.data == testData)
+        #expect(miss.data == nil)
+    }
+
+    @Test("metadata property returns metadata for all cases except miss")
+    func metadataProperty() {
+        let testData: Data = "test".data(using: .utf8)!
+        let metadata: CacheMetadata = CacheMetadata(etag: "\"test\"", cachedAt: Date())
+
+        let fresh: CacheRetrievalResult = .fresh(testData, metadata)
+        let stale: CacheRetrievalResult = .stale(testData, metadata)
+        let needsRevalidation: CacheRetrievalResult = .needsRevalidation(testData, metadata)
+        let miss: CacheRetrievalResult = .miss
+
+        #expect(fresh.metadata?.etag == "\"test\"")
+        #expect(stale.metadata?.etag == "\"test\"")
+        #expect(needsRevalidation.metadata?.etag == "\"test\"")
+        #expect(miss.metadata == nil)
+    }
+}
+
+// MARK: - CacheControlDirective Tests
+
+@Suite("CacheControlDirective Tests")
+struct CacheControlDirectiveTests {
+    @Test("Default initializer sets all values to defaults")
+    func defaultInitializer() {
+        let directive: CacheControlDirective = CacheControlDirective()
+
+        #expect(directive.maxAge == nil)
+        #expect(directive.sharedMaxAge == nil)
+        #expect(directive.noCache == false)
+        #expect(directive.noStore == false)
+        #expect(directive.isPrivate == false)
+        #expect(directive.isPublic == false)
+        #expect(directive.mustRevalidate == false)
+        #expect(directive.staleWhileRevalidate == nil)
+        #expect(directive.staleIfError == nil)
+        #expect(directive.immutable == false)
+    }
+
+    @Test("CacheControlDirective is Equatable")
+    func equatable() {
+        let directive1: CacheControlDirective = CacheControlDirective(maxAge: 3600, noCache: true)
+        let directive2: CacheControlDirective = CacheControlDirective(maxAge: 3600, noCache: true)
+        let directive3: CacheControlDirective = CacheControlDirective(maxAge: 7200, noCache: true)
+
+        #expect(directive1 == directive2)
+        #expect(directive1 != directive3)
+    }
+
+    @Test("CacheControlDirective is Codable")
+    func codable() throws {
+        let directive: CacheControlDirective = CacheControlDirective(
+            maxAge: 3600,
+            noCache: true,
+            isPublic: true,
+            staleWhileRevalidate: 60
+        )
+
+        let encoder: JSONEncoder = JSONEncoder()
+        let data: Data = try encoder.encode(directive)
+
+        let decoder: JSONDecoder = JSONDecoder()
+        let decoded: CacheControlDirective = try decoder.decode(CacheControlDirective.self, from: data)
+
+        #expect(decoded == directive)
+    }
+}

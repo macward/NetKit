@@ -1,5 +1,11 @@
 import Foundation
 
+// MARK: - HTTP Status Codes
+
+private enum HTTPStatusCode {
+    static let notModified: Int = 304
+}
+
 /// The main network client for executing API requests.
 public final class NetworkClient: NetworkClientProtocol, Sendable {
     private let environment: NetworkEnvironment
@@ -59,8 +65,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         additionalHeaders: [String: String],
         timeoutOverride: TimeInterval?
     ) async throws -> E.Response {
-        // Build the initial request
-        var urlRequest = try URLRequest(
+        var urlRequest: URLRequest = try URLRequest(
             endpoint: endpoint,
             environment: environment,
             additionalHeaders: additionalHeaders,
@@ -68,55 +73,91 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             encoder: encoder
         )
 
-        // Check cache for GET requests
+        var cachedData: Data?
+        var cachedMetadata: CacheMetadata?
+
         if endpoint.method == .get, let cache {
-            if let cachedData = await cache.retrieve(for: urlRequest) {
-                return try decodeResponse(cachedData, for: endpoint)
+            switch endpoint.cachePolicy {
+            case .noCache:
+                break
+
+            case .respectHeaders, .always, .overrideTTL:
+                let cacheResult: CacheRetrievalResult = await cache.retrieveWithMetadata(for: urlRequest)
+
+                switch cacheResult {
+                case .fresh(let data, _):
+                    return try decodeResponse(data, for: endpoint)
+
+                case .stale(let data, let metadata):
+                    cachedData = data
+                    cachedMetadata = metadata
+                    addConditionalHeaders(to: &urlRequest, from: metadata)
+
+                case .needsRevalidation(let data, let metadata):
+                    cachedData = data
+                    cachedMetadata = metadata
+                    addConditionalHeaders(to: &urlRequest, from: metadata)
+
+                case .miss:
+                    break
+                }
             }
         }
 
-        // Apply request interceptors (in order)
         for interceptor in interceptors {
             urlRequest = try await interceptor.intercept(request: urlRequest)
         }
 
-        // Execute with retry logic
         var lastError: Error?
-        let maxAttempts = (retryPolicy?.maxRetries ?? 0) + 1
+        let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
 
         for attempt in 0..<maxAttempts {
             do {
-                // Wait for retry delay (skip first attempt)
                 if attempt > 0, let policy = retryPolicy {
-                    let delay = policy.delay(for: attempt - 1)
+                    let delay: TimeInterval = policy.delay(for: attempt - 1)
                     if delay > 0 {
                         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     }
                 }
 
-                let (data, response) = try await performRequest(urlRequest)
+                let (data, response): (Data, HTTPURLResponse) = try await performRequest(urlRequest)
 
-                // Apply response interceptors (in reverse order)
-                var responseData = data
+                if response.statusCode == HTTPStatusCode.notModified, let cachedData, let cache {
+                    await cache.updateAfterRevalidation(for: urlRequest, response: response)
+                    return try decodeResponse(cachedData, for: endpoint)
+                }
+
+                var responseData: Data = data
                 for interceptor in interceptors.reversed() {
                     responseData = try await interceptor.intercept(response: response, data: responseData)
                 }
 
-                // Map status code to error if needed
                 try validateResponse(response)
 
-                // Cache successful GET responses
                 if endpoint.method == .get, let cache {
-                    await cache.store(data: responseData, for: urlRequest, ttl: 300)
+                    await cacheResponse(
+                        data: responseData,
+                        request: urlRequest,
+                        response: response,
+                        endpoint: endpoint,
+                        cache: cache
+                    )
                 }
 
-                // Decode and return
                 return try decodeResponse(responseData, for: endpoint)
 
             } catch {
+                if let networkError = error as? NetworkError,
+                   case .serverError = networkError,
+                   let cachedData,
+                   let cachedMetadata,
+                   let staleIfError = cachedMetadata.cacheControl?.staleIfError,
+                   cachedMetadata.isStaleButRevalidatable(within: staleIfError) {
+                    return try decodeResponse(cachedData, for: endpoint)
+                }
+
                 lastError = error
 
-                // Check if we should retry
                 if let policy = retryPolicy,
                    let networkError = error as? NetworkError,
                    policy.shouldRetry(error: networkError, attempt: attempt) {
@@ -128,6 +169,47 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         }
 
         throw lastError ?? NetworkError.unknown(NSError(domain: "NetKit", code: -1))
+    }
+
+    // MARK: - Private Helpers
+
+    /// Adds conditional headers (If-None-Match, If-Modified-Since) to a request.
+    private func addConditionalHeaders(to request: inout URLRequest, from metadata: CacheMetadata) {
+        if let etag = metadata.etag {
+            request.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+        if let lastModified = metadata.lastModified {
+            request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
+        }
+    }
+
+    /// Caches a response according to endpoint and server cache policies.
+    private func cacheResponse<E: Endpoint>(
+        data: Data,
+        request: URLRequest,
+        response: HTTPURLResponse,
+        endpoint: E,
+        cache: ResponseCache
+    ) async {
+        switch endpoint.cachePolicy {
+        case .noCache:
+            return
+
+        case .respectHeaders:
+            await cache.store(data: data, for: request, response: response)
+
+        case .always(let ttl):
+            await cache.store(data: data, for: request, ttl: ttl)
+
+        case .overrideTTL(let ttl):
+            let cacheControl: CacheControlDirective? = CacheControlParser.parse(
+                response.value(forHTTPHeaderField: "Cache-Control")
+            )
+            if let cacheControl, cacheControl.noStore {
+                return
+            }
+            await cache.store(data: data, for: request, ttl: ttl)
+        }
     }
 
     /// Performs the actual network request.
@@ -175,7 +257,6 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
 
     /// Decodes the response data.
     private func decodeResponse<E: Endpoint>(_ data: Data, for endpoint: E) throws -> E.Response {
-        // Handle EmptyResponse specially
         if E.Response.self == EmptyResponse.self {
             return EmptyResponse() as! E.Response
         }
