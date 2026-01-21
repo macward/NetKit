@@ -175,3 +175,51 @@ Falls back to `application/octet-stream` for unknown types.
 - Downloads automatically create parent directories if needed
 - Downloads overwrite existing files at destination
 - Speed calculation uses rolling average of last 5 samples for stability
+- **Downloads do not support automatic retry** - if a download fails, initiate a new request
+
+---
+
+## Code Review Fixes (2026-01-21)
+
+Following a comprehensive code review, the following issues were addressed:
+
+### Critical Fixes
+
+1. **AsyncStream Continuation Pattern** (`NetworkClient.swift`)
+   - **Issue**: Used implicitly unwrapped optional `var continuation!` which is fragile
+   - **Fix**: Replaced with `AsyncStream.makeStream()` for safe, synchronous initialization
+   - **Lines affected**: upload methods (330-333, 358-361, 384-387)
+
+2. **URLSession Memory Leak** (`ProgressDelegate.swift`, `NetworkClient.swift`)
+   - **Issue**: `DownloadProgressDelegate` never invalidated its URLSession
+   - **Fix**: Added `sessionBox` with `OSAllocatedUnfairLock` to store session reference
+   - Added `setSession()` and `invalidateSession()` methods
+   - Session is now properly invalidated on completion or error
+
+### Important Fixes
+
+3. **Force Cast Removal** (`NetworkClient.swift:291-293`)
+   - **Issue**: `EmptyResponse() as! E.Response` could crash
+   - **Fix**: Changed to safe optional cast with `if let` pattern
+
+4. **Silent Failure in MultipartFormData** (`MultipartFormData.swift:67-76`)
+   - **Issue**: `append(value:name:)` silently failed if UTF-8 encoding failed
+   - **Fix**: Changed to `Data(value.utf8)` which never fails for valid Swift strings
+
+5. **File Validation Before Upload** (`NetworkClient.swift:406-418`)
+   - **Issue**: No validation that file exists before upload attempt
+   - **Fix**: Added early `FileManager.fileExists()` check with proper error
+
+6. **Public `collect()` Method** (`TransferProgressStream.swift:88`)
+   - **Issue**: `collect()` was `internal` but documented as "useful for testing"
+   - **Fix**: Made `public` so consumers can use it in their tests
+
+7. **Download Retry Documentation** (`NetworkClient.swift:378-382`)
+   - **Issue**: Downloads don't support retry but this wasn't documented
+   - **Fix**: Added documentation note explaining retry limitation
+
+### Files Modified in Code Review
+- `Sources/NetKit/Core/NetworkClient.swift`
+- `Sources/NetKit/Progress/ProgressDelegate.swift`
+- `Sources/NetKit/Progress/MultipartFormData.swift`
+- `Sources/NetKit/Progress/TransferProgressStream.swift`

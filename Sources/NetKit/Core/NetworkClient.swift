@@ -288,8 +288,9 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         request: RequestSnapshot,
         response: ResponseSnapshot?
     ) throws -> E.Response {
-        if E.Response.self == EmptyResponse.self {
-            return EmptyResponse() as! E.Response
+        if E.Response.self == EmptyResponse.self,
+           let emptyResponse = EmptyResponse() as? E.Response {
+            return emptyResponse
         }
 
         do {
@@ -327,10 +328,7 @@ extension NetworkClient {
     ///   - endpoint: The endpoint to upload to.
     /// - Returns: An `UploadResult` containing progress stream and response task.
     public func upload<E: Endpoint>(file: URL, to endpoint: E) -> UploadResult<E.Response> {
-        var continuation: AsyncStream<TransferProgress>.Continuation!
-        let stream: AsyncStream<TransferProgress> = AsyncStream { cont in
-            continuation = cont
-        }
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<E.Response, Error> = Task {
             try await performUpload(
@@ -354,11 +352,7 @@ extension NetworkClient {
     /// - Returns: An `UploadResult` containing progress stream and response task.
     public func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) -> UploadResult<E.Response> {
         let encodedFormData: EncodedMultipartFormData = EncodedMultipartFormData(from: formData)
-
-        var continuation: AsyncStream<TransferProgress>.Continuation!
-        let stream: AsyncStream<TransferProgress> = AsyncStream { cont in
-            continuation = cont
-        }
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<E.Response, Error> = Task {
             try await performUpload(
@@ -376,15 +370,17 @@ extension NetworkClient {
     }
 
     /// Downloads a file from the specified endpoint with progress tracking.
+    ///
+    /// - Note: Downloads do not support automatic retry. If a download fails, you must
+    ///   initiate a new download request. This is because download tasks write directly
+    ///   to disk and partial downloads cannot be safely resumed with the current implementation.
+    ///
     /// - Parameters:
     ///   - endpoint: The endpoint to download from.
     ///   - destination: The URL where the file should be saved.
     /// - Returns: A `DownloadResult` containing progress stream and response task.
     public func download<E: Endpoint>(from endpoint: E, to destination: URL) -> DownloadResult {
-        var continuation: AsyncStream<TransferProgress>.Continuation!
-        let stream: AsyncStream<TransferProgress> = AsyncStream { cont in
-            continuation = cont
-        }
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<URL, Error> = Task {
             try await performDownload(
@@ -408,6 +404,21 @@ extension NetworkClient {
         formData: EncodedMultipartFormData?,
         continuation: AsyncStream<TransferProgress>.Continuation
     ) async throws -> E.Response {
+        // Validate file exists before attempting upload
+        if let fileURL {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                continuation.finish()
+                throw NetworkError.invalidURL(
+                    request: nil,
+                    underlyingError: NSError(
+                        domain: "NetKit",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "File does not exist at path: \(fileURL.path)"]
+                    )
+                )
+            }
+        }
+
         var urlRequest: URLRequest = try URLRequest(
             endpoint: endpoint,
             environment: environment,
@@ -569,6 +580,7 @@ extension NetworkClient {
                 delegate: delegate,
                 delegateQueue: nil
             )
+            delegate.setSession(downloadSession)
 
             let task: URLSessionDownloadTask = downloadSession.downloadTask(with: urlRequest)
             task.resume()

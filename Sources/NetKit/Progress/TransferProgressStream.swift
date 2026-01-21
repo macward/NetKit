@@ -84,8 +84,13 @@ extension TransferProgressStream {
 
 extension TransferProgressStream {
     /// Collects all progress updates into an array.
-    /// Useful for testing.
-    internal func collect() async -> [TransferProgress] {
+    ///
+    /// This method consumes the entire stream and returns all progress updates.
+    /// Primarily useful for testing scenarios where you want to verify
+    /// the complete sequence of progress updates.
+    ///
+    /// - Returns: An array containing all progress updates from the stream.
+    public func collect() async -> [TransferProgress] {
         var results: [TransferProgress] = []
         for await progress in self {
             results.append(progress)

@@ -61,11 +61,16 @@ public final class MultipartFormData: @unchecked Sendable {
     }
 
     /// Appends a string value as a form field.
+    ///
+    /// - Note: Uses UTF-8 encoding. All valid Swift strings can be encoded as UTF-8,
+    ///   so this method will always succeed for normal string values.
+    ///
     /// - Parameters:
     ///   - value: The string value to append.
     ///   - name: The form field name.
     public func append(value: String, name: String) {
-        guard let data = value.data(using: .utf8) else { return }
+        // UTF-8 encoding of Swift strings should never fail for valid strings
+        let data: Data = Data(value.utf8)
         let part: Part = Part(
             name: name,
             filename: nil,

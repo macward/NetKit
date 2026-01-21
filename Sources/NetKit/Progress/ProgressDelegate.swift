@@ -157,6 +157,7 @@ internal final class DownloadProgressDelegate: NSObject, URLSessionDownloadDeleg
     private let continuation: AsyncStream<TransferProgress>.Continuation
     private let destination: URL
     private let completionHandler: @Sendable (Result<URL, Error>) -> Void
+    private let sessionBox: OSAllocatedUnfairLock<URLSession?>
 
     /// Creates a download progress delegate.
     /// - Parameters:
@@ -172,10 +173,24 @@ internal final class DownloadProgressDelegate: NSObject, URLSessionDownloadDeleg
         self.continuation = continuation
         self.destination = destination
         self.completionHandler = completionHandler
+        self.sessionBox = OSAllocatedUnfairLock(initialState: nil)
         super.init()
 
         continuation.onTermination = { [weak self] _ in
             self?.state.withLock { $0.isFinished = true }
+        }
+    }
+
+    /// Sets the URLSession reference for cleanup on completion.
+    /// Must be called after creating the session.
+    func setSession(_ session: URLSession) {
+        sessionBox.withLock { $0 = session }
+    }
+
+    private func invalidateSession() {
+        sessionBox.withLock { session in
+            session?.finishTasksAndInvalidate()
+            session = nil
         }
     }
 
@@ -255,11 +270,13 @@ internal final class DownloadProgressDelegate: NSObject, URLSessionDownloadDeleg
 
             continuation.yield(finalProgress)
             continuation.finish()
+            invalidateSession()
             completionHandler(.success(destination))
 
         } catch {
             state.withLock { $0.isFinished = true }
             continuation.finish()
+            invalidateSession()
             completionHandler(.failure(error))
         }
     }
@@ -273,6 +290,7 @@ internal final class DownloadProgressDelegate: NSObject, URLSessionDownloadDeleg
 
         state.withLock { $0.isFinished = true }
         continuation.finish()
+        invalidateSession()
         completionHandler(.failure(error))
     }
 
