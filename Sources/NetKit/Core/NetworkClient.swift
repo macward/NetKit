@@ -86,7 +86,8 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
 
                 switch cacheResult {
                 case .fresh(let data, _):
-                    return try decodeResponse(data, for: endpoint)
+                    let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
+                    return try decodeResponse(data, for: endpoint, request: requestSnapshot, response: nil)
 
                 case .stale(let data, let metadata):
                     cachedData = data
@@ -108,6 +109,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             urlRequest = try await interceptor.intercept(request: urlRequest)
         }
 
+        let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
         var lastError: Error?
         let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
 
@@ -121,10 +123,16 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                 }
 
                 let (data, response): (Data, HTTPURLResponse) = try await performRequest(urlRequest)
+                let responseSnapshot: ResponseSnapshot = ResponseSnapshot(response: response, data: data)
 
                 if response.statusCode == HTTPStatusCode.notModified, let cachedData, let cache {
                     await cache.updateAfterRevalidation(for: urlRequest, response: response)
-                    return try decodeResponse(cachedData, for: endpoint)
+                    return try decodeResponse(
+                        cachedData,
+                        for: endpoint,
+                        request: requestSnapshot,
+                        response: responseSnapshot
+                    )
                 }
 
                 var responseData: Data = data
@@ -132,7 +140,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                     responseData = try await interceptor.intercept(response: response, data: responseData)
                 }
 
-                try validateResponse(response)
+                try validateResponse(response, request: requestSnapshot, data: responseData)
 
                 if endpoint.method == .get, let cache {
                     await cacheResponse(
@@ -144,16 +152,26 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                     )
                 }
 
-                return try decodeResponse(responseData, for: endpoint)
+                return try decodeResponse(
+                    responseData,
+                    for: endpoint,
+                    request: requestSnapshot,
+                    response: responseSnapshot
+                )
 
             } catch {
                 if let networkError = error as? NetworkError,
-                   case .serverError = networkError,
+                   networkError.kind.isServerError,
                    let cachedData,
                    let cachedMetadata,
                    let staleIfError = cachedMetadata.cacheControl?.staleIfError,
                    cachedMetadata.isStaleButRevalidatable(within: staleIfError) {
-                    return try decodeResponse(cachedData, for: endpoint)
+                    return try decodeResponse(
+                        cachedData,
+                        for: endpoint,
+                        request: requestSnapshot,
+                        response: nil
+                    )
                 }
 
                 lastError = error
@@ -168,7 +186,10 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             }
         }
 
-        throw lastError ?? NetworkError.unknown(NSError(domain: "NetKit", code: -1))
+        throw lastError ?? NetworkError.unknown(
+            request: requestSnapshot,
+            underlyingError: NSError(domain: "NetKit", code: -1)
+        )
     }
 
     // MARK: - Private Helpers
@@ -215,48 +236,58 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     /// Performs the actual network request.
     private func performRequest(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response): (Data, URLResponse)
+        let requestSnapshot: RequestSnapshot = RequestSnapshot(request: request)
 
         do {
             (data, response) = try await session.data(for: request)
         } catch let urlError as URLError {
-            throw mapURLError(urlError)
+            throw mapURLError(urlError, request: requestSnapshot)
         } catch {
-            throw NetworkError.unknown(error)
+            throw NetworkError.unknown(request: requestSnapshot, underlyingError: error)
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw NetworkError.unknown(NSError(domain: "NetKit", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "Invalid response type"
-            ]))
+            throw NetworkError.unknown(
+                request: requestSnapshot,
+                underlyingError: NSError(domain: "NetKit", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Invalid response type"
+                ])
+            )
         }
 
         return (data, httpResponse)
     }
 
     /// Validates the HTTP response status code.
-    private func validateResponse(_ response: HTTPURLResponse) throws {
+    private func validateResponse(
+        _ response: HTTPURLResponse,
+        request: RequestSnapshot,
+        data: Data?
+    ) throws {
         switch response.statusCode {
         case 200..<204, 205..<300:
             return
         case 204:
-            throw NetworkError.noContent
-        case 401:
-            throw NetworkError.unauthorized
-        case 403:
-            throw NetworkError.forbidden
-        case 404:
-            throw NetworkError.notFound
-        case 408:
-            throw NetworkError.timeout
-        case 500..<600:
-            throw NetworkError.serverError(statusCode: response.statusCode)
+            throw NetworkError.noContent(
+                request: request,
+                response: ResponseSnapshot(response: response, data: data)
+            )
         default:
-            throw NetworkError.serverError(statusCode: response.statusCode)
+            throw NetworkError.fromStatusCode(
+                response.statusCode,
+                request: request,
+                response: ResponseSnapshot(response: response, data: data)
+            )
         }
     }
 
     /// Decodes the response data.
-    private func decodeResponse<E: Endpoint>(_ data: Data, for endpoint: E) throws -> E.Response {
+    private func decodeResponse<E: Endpoint>(
+        _ data: Data,
+        for endpoint: E,
+        request: RequestSnapshot,
+        response: ResponseSnapshot?
+    ) throws -> E.Response {
         if E.Response.self == EmptyResponse.self {
             return EmptyResponse() as! E.Response
         }
@@ -264,21 +295,25 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         do {
             return try decoder.decode(E.Response.self, from: data)
         } catch {
-            throw NetworkError.decodingError(error)
+            throw NetworkError.decodingFailed(
+                request: request,
+                response: response,
+                underlyingError: error
+            )
         }
     }
 
     /// Maps URLError to NetworkError.
-    private func mapURLError(_ error: URLError) -> NetworkError {
+    private func mapURLError(_ error: URLError, request: RequestSnapshot) -> NetworkError {
         switch error.code {
         case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:
-            return .noConnection
+            return .noConnection(request: request, underlyingError: error)
         case .timedOut:
-            return .timeout
+            return .timeout(request: request, underlyingError: error)
         case .badURL, .unsupportedURL:
-            return .invalidURL
+            return .invalidURL(request: request, underlyingError: error)
         default:
-            return .unknown(error)
+            return .unknown(request: request, underlyingError: error)
         }
     }
 }

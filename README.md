@@ -99,18 +99,35 @@ public enum HTTPMethod: String {
 
 ### Network Errors
 
+NetworkError is a struct with rich context for debugging:
+
 ```swift
-public enum NetworkError: Error {
+public struct NetworkError: Error {
+    public let kind: ErrorKind           // The type of error
+    public let request: RequestSnapshot? // URL, method, sanitized headers
+    public let response: ResponseSnapshot? // Status code, headers, body preview
+    public let underlyingError: (any Error)?
+    public let timestamp: Date
+    public let retryAttempt: Int?
+}
+
+public enum ErrorKind {
     case invalidURL
     case noConnection
     case timeout
     case unauthorized      // 401
     case forbidden         // 403
     case notFound          // 404
-    case serverError(statusCode: Int)  // 5xx
-    case decodingError(Error)
-    case encodingError(Error)
-    case unknown(Error)
+    case noContent         // 204
+    case rateLimited       // 429
+    case badGateway        // 502
+    case serviceUnavailable // 503
+    case gatewayTimeout    // 504
+    case serverError(statusCode: Int)  // Other 5xx
+    case clientError(statusCode: Int)  // Other 4xx
+    case decodingFailed
+    case encodingFailed
+    case unknown
 }
 ```
 
@@ -295,7 +312,7 @@ let retryPolicy = RetryPolicy(
 let retryPolicy = RetryPolicy(
     maxRetries: 3,
     shouldRetry: { error in
-        switch error {
+        switch error.kind {
         case .timeout, .noConnection:
             return true
         default:
@@ -539,14 +556,14 @@ final class UserServiceTests: XCTestCase {
 
     func testGetUserError() async throws {
         // Stub an error
-        await mockClient.stubError(GetUserEndpoint.self, error: .notFound)
+        await mockClient.stubError(GetUserEndpoint.self, error: .notFound())
 
         // Test error handling
         do {
             _ = try await userService.getUser(id: "invalid")
             XCTFail("Expected error")
         } catch let error as NetworkError {
-            XCTAssertEqual(error, .notFound)
+            XCTAssertEqual(error.kind, .notFound)
         }
     }
 
@@ -579,7 +596,7 @@ await mockClient.stub(EndpointType.self, delay: 1.0) { endpoint in
 }
 
 // Stub error
-await mockClient.stubError(EndpointType.self, error: .notFound)
+await mockClient.stubError(EndpointType.self, error: .notFound())
 
 // Stub sequence (for polling/repeated calls)
 await mockClient.stubSequence(EndpointType.self, responses: [
@@ -591,7 +608,7 @@ await mockClient.stubSequence(EndpointType.self, responses: [
 // Stub sequence with mixed results
 await mockClient.stubSequence(EndpointType.self, sequence: [
     .success(response1),
-    .failure(.timeout),
+    .failure(.timeout()),
     .success(response2)
 ])
 
@@ -637,22 +654,40 @@ let service = UserService(client: MockNetworkClient())
 ```swift
 do {
     let user = try await client.request(GetUserEndpoint(id: "123"))
-} catch NetworkError.unauthorized {
-    // Handle 401 - redirect to login
-} catch NetworkError.notFound {
-    // Handle 404 - show not found UI
-} catch NetworkError.noConnection {
-    // Handle offline - show retry option
-} catch NetworkError.timeout {
-    // Handle timeout - suggest retry
-} catch NetworkError.serverError(let statusCode) {
-    // Handle 5xx errors
-    print("Server error: \(statusCode)")
-} catch NetworkError.decodingError(let error) {
-    // Handle JSON parsing errors
-    print("Failed to decode: \(error)")
+} catch let error as NetworkError {
+    switch error.kind {
+    case .unauthorized:
+        // Handle 401 - redirect to login
+        break
+    case .notFound:
+        // Handle 404 - show not found UI
+        break
+    case .noConnection:
+        // Handle offline - show retry option
+        break
+    case .timeout:
+        // Handle timeout - suggest retry
+        break
+    case .serverError(let statusCode):
+        // Handle 5xx errors
+        print("Server error: \(statusCode)")
+    case .decodingFailed:
+        // Handle JSON parsing errors
+        if let underlying = error.underlyingError {
+            print("Failed to decode: \(underlying)")
+        }
+    default:
+        print("Error: \(error.errorDescription ?? "Unknown")")
+    }
+
+    // Access rich error context for debugging
+    if let request = error.request {
+        print("Failed request: \(request.method ?? "") \(request.url?.absoluteString ?? "")")
+    }
+    if let response = error.response {
+        print("Response status: \(response.statusCode)")
+    }
 } catch {
-    // Handle other errors
     print("Unknown error: \(error)")
 }
 ```

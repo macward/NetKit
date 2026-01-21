@@ -77,20 +77,66 @@ struct HTTPMethodTests {
 struct NetworkErrorTests {
     @Test("Error cases are equatable")
     func equality() {
-        #expect(NetworkError.invalidURL == NetworkError.invalidURL)
-        #expect(NetworkError.noConnection == NetworkError.noConnection)
-        #expect(NetworkError.timeout == NetworkError.timeout)
-        #expect(NetworkError.unauthorized == NetworkError.unauthorized)
-        #expect(NetworkError.forbidden == NetworkError.forbidden)
-        #expect(NetworkError.notFound == NetworkError.notFound)
-        #expect(NetworkError.serverError(statusCode: 500) == NetworkError.serverError(statusCode: 500))
-        #expect(NetworkError.serverError(statusCode: 500) != NetworkError.serverError(statusCode: 502))
+        #expect(NetworkError.invalidURL() == NetworkError.invalidURL())
+        #expect(NetworkError.noConnection() == NetworkError.noConnection())
+        #expect(NetworkError.timeout() == NetworkError.timeout())
+        #expect(NetworkError.unauthorized() == NetworkError.unauthorized())
+        #expect(NetworkError.forbidden() == NetworkError.forbidden())
+        #expect(NetworkError.notFound() == NetworkError.notFound())
+        #expect(NetworkError(kind: .serverError(statusCode: 500)) == NetworkError(kind: .serverError(statusCode: 500)))
+        #expect(NetworkError(kind: .serverError(statusCode: 500)) != NetworkError(kind: .serverError(statusCode: 502)))
     }
 
     @Test("Different error types are not equal")
     func inequality() {
-        #expect(NetworkError.invalidURL != NetworkError.noConnection)
-        #expect(NetworkError.timeout != NetworkError.unauthorized)
+        #expect(NetworkError.invalidURL() != NetworkError.noConnection())
+        #expect(NetworkError.timeout() != NetworkError.unauthorized())
+    }
+
+    @Test("Error kind is accessible")
+    func errorKindAccessible() {
+        let timeoutError = NetworkError.timeout()
+        #expect(timeoutError.kind == .timeout)
+
+        let serverError = NetworkError(kind: .serverError(statusCode: 503))
+        if case .serverError(let code) = serverError.kind {
+            #expect(code == 503)
+        } else {
+            Issue.record("Expected serverError kind")
+        }
+    }
+
+    @Test("Error includes request context")
+    func requestContext() {
+        let snapshot = RequestSnapshot(
+            url: URL(string: "https://api.example.com/test"),
+            method: "GET"
+        )
+        let error = NetworkError.timeout(request: snapshot)
+
+        #expect(error.request?.url?.absoluteString == "https://api.example.com/test")
+        #expect(error.request?.method == "GET")
+    }
+
+    @Test("Error includes response context")
+    func responseContext() {
+        let responseSnapshot = ResponseSnapshot(statusCode: 500, bodyPreview: "Error occurred")
+        let error = NetworkError(kind: .serverError(statusCode: 500), response: responseSnapshot)
+
+        #expect(error.response?.statusCode == 500)
+        #expect(error.response?.bodyPreview == "Error occurred")
+    }
+
+    @Test("Headers are sanitized")
+    func headersSanitized() {
+        let snapshot = RequestSnapshot(
+            url: URL(string: "https://api.example.com"),
+            method: "GET",
+            headers: ["Authorization": "Bearer secret", "Content-Type": "application/json"]
+        )
+
+        #expect(snapshot.headers["Authorization"] == "[REDACTED]")
+        #expect(snapshot.headers["Content-Type"] == "application/json")
     }
 }
 
@@ -174,30 +220,30 @@ struct RetryPolicyTests {
     func shouldRetryOnRetryableErrors() {
         let policy = RetryPolicy(maxRetries: 3)
 
-        #expect(policy.shouldRetry(error: .noConnection, attempt: 0) == true)
-        #expect(policy.shouldRetry(error: .timeout, attempt: 0) == true)
-        #expect(policy.shouldRetry(error: .serverError(statusCode: 500), attempt: 0) == true)
-        #expect(policy.shouldRetry(error: .serverError(statusCode: 503), attempt: 0) == true)
+        #expect(policy.shouldRetry(error: .noConnection(), attempt: 0) == true)
+        #expect(policy.shouldRetry(error: .timeout(), attempt: 0) == true)
+        #expect(policy.shouldRetry(error: NetworkError(kind: .serverError(statusCode: 500)), attempt: 0) == true)
+        #expect(policy.shouldRetry(error: NetworkError(kind: .serviceUnavailable), attempt: 0) == true)
     }
 
     @Test("Should not retry on non-retryable errors")
     func shouldNotRetryOnNonRetryableErrors() {
         let policy = RetryPolicy(maxRetries: 3)
 
-        #expect(policy.shouldRetry(error: .unauthorized, attempt: 0) == false)
-        #expect(policy.shouldRetry(error: .forbidden, attempt: 0) == false)
-        #expect(policy.shouldRetry(error: .notFound, attempt: 0) == false)
-        #expect(policy.shouldRetry(error: .invalidURL, attempt: 0) == false)
+        #expect(policy.shouldRetry(error: .unauthorized(), attempt: 0) == false)
+        #expect(policy.shouldRetry(error: .forbidden(), attempt: 0) == false)
+        #expect(policy.shouldRetry(error: .notFound(), attempt: 0) == false)
+        #expect(policy.shouldRetry(error: .invalidURL(), attempt: 0) == false)
     }
 
     @Test("Should respect max retries")
     func respectsMaxRetries() {
         let policy = RetryPolicy(maxRetries: 2)
 
-        #expect(policy.shouldRetry(error: .timeout, attempt: 0) == true)
-        #expect(policy.shouldRetry(error: .timeout, attempt: 1) == true)
-        #expect(policy.shouldRetry(error: .timeout, attempt: 2) == false)
-        #expect(policy.shouldRetry(error: .timeout, attempt: 3) == false)
+        #expect(policy.shouldRetry(error: .timeout(), attempt: 0) == true)
+        #expect(policy.shouldRetry(error: .timeout(), attempt: 1) == true)
+        #expect(policy.shouldRetry(error: .timeout(), attempt: 2) == false)
+        #expect(policy.shouldRetry(error: .timeout(), attempt: 3) == false)
     }
 
     @Test("Immediate delay returns zero")
@@ -383,13 +429,13 @@ struct MockNetworkClientTests {
     func stubErrorResponse() async throws {
         let client = MockNetworkClient()
 
-        await client.stubError(GetUserEndpoint.self, error: .notFound)
+        await client.stubError(GetUserEndpoint.self, error: .notFound())
 
         do {
             _ = try await client.request(GetUserEndpoint(id: "123"))
             Issue.record("Expected error to be thrown")
         } catch let error as NetworkError {
-            #expect(error == .notFound)
+            #expect(error.kind == .notFound)
         }
     }
 
@@ -715,8 +761,8 @@ struct LongPollingStateTests {
         #expect(LongPollingState.completed == LongPollingState.completed)
         #expect(LongPollingState.waiting(retryIn: 1.0) == LongPollingState.waiting(retryIn: 1.0))
         #expect(LongPollingState.waiting(retryIn: 1.0) != LongPollingState.waiting(retryIn: 2.0))
-        #expect(LongPollingState.failed(.timeout) == LongPollingState.failed(.timeout))
-        #expect(LongPollingState.failed(.timeout) != LongPollingState.failed(.noConnection))
+        #expect(LongPollingState.failed(.timeout()) == LongPollingState.failed(.timeout()))
+        #expect(LongPollingState.failed(.timeout()) != LongPollingState.failed(.noConnection()))
     }
 
     @Test("Different states are not equal")
@@ -776,7 +822,7 @@ struct MockNetworkClientSequenceTests {
         let client = MockNetworkClient()
         let sequence: [Result<[Message], NetworkError>] = [
             .success([Message(id: "1", content: "Success")]),
-            .failure(.timeout),
+            .failure(.timeout()),
             .success([Message(id: "2", content: "After timeout")])
         ]
 
@@ -791,7 +837,7 @@ struct MockNetworkClientSequenceTests {
             _ = try await client.request(MessagesPollingEndpoint())
             Issue.record("Expected timeout error")
         } catch let error as NetworkError {
-            #expect(error == .timeout)
+            #expect(error.kind == .timeout)
         }
 
         // Third call succeeds
@@ -845,8 +891,8 @@ struct MockNetworkClientSequenceTests {
 struct NetworkErrorNoContentTests {
     @Test("NoContent error is equatable")
     func noContentEquatable() {
-        #expect(NetworkError.noContent == NetworkError.noContent)
-        #expect(NetworkError.noContent != NetworkError.notFound)
+        #expect(NetworkError.noContent() == NetworkError.noContent())
+        #expect(NetworkError.noContent() != NetworkError.notFound())
     }
 }
 
