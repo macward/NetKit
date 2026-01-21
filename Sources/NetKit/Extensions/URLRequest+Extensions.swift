@@ -54,7 +54,7 @@ extension URLRequest {
                     self.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 }
             } catch {
-                throw NetworkError.encodingError(error)
+                throw NetworkError.encodingFailed(underlyingError: error)
             }
         }
     }
@@ -71,7 +71,7 @@ extension URLRequest {
         // Add query parameters if present
         if !queryParameters.isEmpty {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
-                throw NetworkError.invalidURL
+                throw NetworkError.invalidURL()
             }
 
             components.queryItems = queryParameters.map { key, value in
@@ -79,7 +79,7 @@ extension URLRequest {
             }
 
             guard let finalURL = components.url else {
-                throw NetworkError.invalidURL
+                throw NetworkError.invalidURL()
             }
             url = finalURL
         }

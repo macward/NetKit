@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(solve-task)",
+      "Bash(cd /Users/maxward/Developer/1_PROJECTS/Swift\\\\ Packages/NetKit && git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout -b task/002-network-error-context)",
+      "Bash(xcodebuild -scheme NetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build)",
+      "Bash(xcodebuild -scheme NetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build-for-testing)",
+      "Bash(xcodebuild -scheme NetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test)"
+    ]
+  }
+}

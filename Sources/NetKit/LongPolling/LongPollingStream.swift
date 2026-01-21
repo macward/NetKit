@@ -92,7 +92,7 @@ public struct LongPollingStream<E: LongPollingEndpoint>: AsyncSequence, Sendable
             } catch let error as NetworkError {
                 return await handleError(error)
             } catch {
-                return await handleError(.unknown(error))
+                return await handleError(NetworkError.unknown(underlyingError: error))
             }
         }
 
@@ -120,7 +120,7 @@ public struct LongPollingStream<E: LongPollingEndpoint>: AsyncSequence, Sendable
                 return nil
             }
 
-            switch error {
+            switch error.kind {
             case .timeout:
                 // Timeout is expected in long polling - reconnect immediately
                 return await continuePolling(delay: 0)
@@ -137,21 +137,30 @@ public struct LongPollingStream<E: LongPollingEndpoint>: AsyncSequence, Sendable
                 if statusCode == 408 {
                     // 408 Request Timeout - reconnect immediately
                     return await continuePolling(delay: 0)
-                } else if statusCode >= 500 {
+                } else {
                     // Server errors - wait and retry
                     return await continuePolling(delay: retryInterval)
-                } else {
-                    // Other errors - stop polling
-                    shouldContinue = false
-                    return nil
                 }
+
+            case .badGateway, .serviceUnavailable, .gatewayTimeout:
+                // Server errors - wait and retry
+                return await continuePolling(delay: retryInterval)
+
+            case .rateLimited:
+                // Rate limited - wait longer before retry
+                return await continuePolling(delay: retryInterval * 3)
 
             case .unauthorized, .forbidden, .notFound:
                 // Client errors - stop polling
                 shouldContinue = false
                 return nil
 
-            case .invalidURL, .encodingError, .decodingError:
+            case .clientError:
+                // Other client errors - stop polling
+                shouldContinue = false
+                return nil
+
+            case .invalidURL, .encodingFailed, .decodingFailed:
                 // Fatal errors - stop polling
                 shouldContinue = false
                 return nil

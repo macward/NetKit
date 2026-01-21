@@ -92,11 +92,11 @@ public struct RetryPolicy: Sendable {
 
     /// Default retry logic: retry on connection issues, timeouts, and server errors.
     private static let defaultShouldRetry: @Sendable (NetworkError) -> Bool = { error in
-        switch error {
+        switch error.kind {
         case .noConnection, .timeout:
             return true
-        case .serverError(let statusCode):
-            return statusCode >= 500
+        case .serverError, .badGateway, .serviceUnavailable, .gatewayTimeout:
+            return true
         default:
             return false
         }
