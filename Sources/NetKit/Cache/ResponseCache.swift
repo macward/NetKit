@@ -180,22 +180,7 @@ public actor ResponseCache {
 
     /// Generates a cache key from a URLRequest.
     private func cacheKey(for request: URLRequest) -> String {
-        var components: [String] = []
-
-        components.append(request.httpMethod ?? "GET")
-
-        if let url = request.url?.absoluteString {
-            components.append(url)
-        }
-
-        let relevantHeaders: [String] = ["Accept", "Accept-Language", "Accept-Encoding"]
-        for header in relevantHeaders {
-            if let value = request.value(forHTTPHeaderField: header) {
-                components.append("\(header):\(value)")
-            }
-        }
-
-        return components.joined(separator: "|")
+        CacheKeyGenerator.cacheKey(for: request)
     }
 
     /// Enforces the maximum entries limit by removing oldest entries.
