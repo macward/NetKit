@@ -1,6 +1,6 @@
 # Task: HTTP Cache Headers Support
 
-Status: pending
+Status: done
 
 ## Objective
 Implementar soporte para headers HTTP de cache (Cache-Control, ETag, Last-Modified, Expires) en ResponseCache para respetar las directivas del servidor.
@@ -10,20 +10,20 @@ Implementar soporte para headers HTTP de cache (Cache-Control, ETag, Last-Modifi
 - Dependencies: none
 
 ## Steps
-1. [ ] Crear protocolo CachePolicy con métodos shouldCache, ttl, y invalidationRules
-2. [ ] Parsear header Cache-Control (max-age, no-cache, no-store, private, public)
-3. [ ] Implementar soporte para ETag y conditional requests (If-None-Match)
-4. [ ] Implementar soporte para Last-Modified y If-Modified-Since
-5. [ ] Parsear header Expires como fallback
-6. [ ] Hacer TTL configurable por endpoint (remover hardcode de 300s)
-7. [ ] Actualizar NetworkClient para usar las nuevas políticas
+1. [x] Crear protocolo CachePolicy con métodos shouldCache, ttl, y invalidationRules
+2. [x] Parsear header Cache-Control (max-age, no-cache, no-store, private, public)
+3. [x] Implementar soporte para ETag y conditional requests (If-None-Match)
+4. [x] Implementar soporte para Last-Modified y If-Modified-Since
+5. [x] Parsear header Expires como fallback
+6. [x] Hacer TTL configurable por endpoint (remover hardcode de 300s)
+7. [x] Actualizar NetworkClient para usar las nuevas políticas
 
 ## Acceptance Criteria
-- [ ] Cache respeta Cache-Control: no-store (no cachea)
-- [ ] Cache respeta Cache-Control: max-age
-- [ ] Conditional requests funcionan con ETag
-- [ ] TTL es configurable por endpoint
-- [ ] Tests cubren todos los escenarios de cache headers
+- [x] Cache respeta Cache-Control: no-store (no cachea)
+- [x] Cache respeta Cache-Control: max-age
+- [x] Conditional requests funcionan con ETag
+- [x] TTL es configurable por endpoint
+- [x] Tests cubren todos los escenarios de cache headers
 
 ## Notes
 - Mantener backward compatibility con el cache actual
