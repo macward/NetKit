@@ -198,6 +198,21 @@ struct DiskCacheTests {
         )
     }
 
+    @Test("Factory method creates ready-to-use cache")
+    func factoryMethodCreatesReadyCache() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let cache: DiskCache = try await DiskCache.create(configuration: config)
+
+        let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/factory-test")!)
+        let data: Data = "factory test data".data(using: .utf8)!
+
+        let stored: Bool = await cache.store(data: data, for: request, ttl: 3600)
+        #expect(stored == true)
+
+        let retrieved: Data? = await cache.retrieve(for: request)
+        #expect(retrieved == data)
+    }
+
     @Test("Store and retrieve data")
     func storeAndRetrieve() async throws {
         let config: DiskCacheConfiguration = createTestConfiguration()
@@ -566,6 +581,23 @@ struct HybridCacheTests {
             useFileProtection: false,
             directoryName: "com.netkit.cache.hybrid.test.\(UUID().uuidString)"
         )
+    }
+
+    @Test("Factory method creates ready-to-use hybrid cache")
+    func factoryMethodCreatesReadyCache() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let cache: HybridCache = try await HybridCache.create(
+            memoryMaxEntries: 100,
+            diskConfiguration: config
+        )
+
+        let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/factory-test")!)
+        let data: Data = "hybrid factory test".data(using: .utf8)!
+
+        let stored: Bool = await cache.store(data: data, for: request, ttl: 3600)
+        #expect(stored == true)
+        #expect(await cache.memoryCount == 1)
+        #expect(await cache.diskCount == 1)
     }
 
     @Test("Store in both memory and disk")

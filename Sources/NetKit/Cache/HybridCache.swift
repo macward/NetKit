@@ -27,9 +27,32 @@ public actor HybridCache {
         self.diskCache = try DiskCache(configuration: diskConfiguration, cachePolicy: cachePolicy)
     }
 
-    /// Initializes the cache. Must be called after creation.
+    /// Initializes the cache. Must be called after creation when using init() directly.
+    /// Prefer using the static `create()` factory method instead.
     public func setup() async throws {
         try await diskCache.setup()
+    }
+
+    /// Creates and initializes a hybrid cache in one step.
+    /// This is the preferred way to create a HybridCache instance.
+    /// - Parameters:
+    ///   - memoryMaxEntries: Maximum entries in memory cache.
+    ///   - diskConfiguration: Configuration for disk cache.
+    ///   - cachePolicy: The cache policy to use.
+    /// - Returns: A fully initialized HybridCache ready to use.
+    /// - Throws: An error if initialization fails.
+    public static func create(
+        memoryMaxEntries: Int = ResponseCache.defaultMaxEntries,
+        diskConfiguration: DiskCacheConfiguration = .default,
+        cachePolicy: CachePolicy = HTTPCachePolicy()
+    ) async throws -> HybridCache {
+        let cache: HybridCache = try HybridCache(
+            memoryMaxEntries: memoryMaxEntries,
+            diskConfiguration: diskConfiguration,
+            cachePolicy: cachePolicy
+        )
+        try await cache.setup()
+        return cache
     }
 
     // MARK: - Public API

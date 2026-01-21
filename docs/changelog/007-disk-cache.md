@@ -15,7 +15,7 @@ Implemented a disk-based cache system as a complement to the existing in-memory 
   - `DiskCacheConfiguration` struct with configurable limits
   - `DiskCacheEntry` struct with LRU tracking via `lastAccessedAt`
   - `DiskCacheIndex` struct for persistent index management
-  - `CacheKeyGenerator` with SHA256-based filename generation
+  - `CacheKeyGenerator` with SHA256-based filename generation (using CryptoKit)
 
 - `Sources/NetKit/Cache/DiskCache.swift` - Actor-based disk cache:
   - Thread-safe file operations via actor isolation
@@ -25,14 +25,16 @@ Implemented a disk-based cache system as a complement to the existing in-memory 
   - Index backup and corruption recovery
   - Cache version file for future migrations
   - Clearing methods: by endpoint, by age, total
+  - Static `create()` factory method for safe initialization
 
 - `Sources/NetKit/Cache/HybridCache.swift` - Two-level cache:
   - Memory cache as L1 (hot data, fast access)
   - Disk cache as L2 (persistent, larger capacity)
   - Automatic promotion of disk hits to memory
   - Coordinated invalidation across both layers
+  - Static `create()` factory method for safe initialization
 
-- `Tests/NetKitTests/DiskCacheTests.swift` - Comprehensive tests:
+- `Tests/NetKitTests/DiskCacheTests.swift` - Comprehensive tests (253 tests):
   - Configuration and entry struct tests
   - Cache key generation tests
   - Store/retrieve/invalidate tests
@@ -41,8 +43,10 @@ Implemented a disk-based cache system as a complement to the existing in-memory 
   - Compression verification tests
   - Size limit enforcement tests
   - Hybrid cache integration tests
+  - Factory method tests
 
 ### Modified
+- `Sources/NetKit/Cache/ResponseCache.swift` - Now uses shared `CacheKeyGenerator`
 - `tasks/007-disk-cache.task` - Marked as done with all steps completed
 
 ## Technical Details
@@ -82,11 +86,14 @@ Caches/com.netkit.cache/
 - **LRU Eviction**: Based on `lastAccessedAt` timestamp
 - **Corruption Recovery**: Index backup + automatic recovery
 - **HTTP Headers Integration**: Uses existing `CacheMetadata` (Codable)
+- **Factory Methods**: `DiskCache.create()` and `HybridCache.create()` for safe initialization
+- **Modern Crypto**: Uses CryptoKit (iOS 13+) instead of CommonCrypto for SHA256
 
 ## Files Changed
 - `Sources/NetKit/Cache/CacheStorage.swift` (created)
 - `Sources/NetKit/Cache/DiskCache.swift` (created)
 - `Sources/NetKit/Cache/HybridCache.swift` (created)
+- `Sources/NetKit/Cache/ResponseCache.swift` (modified - uses shared CacheKeyGenerator)
 - `Tests/NetKitTests/DiskCacheTests.swift` (created)
 - `tasks/007-disk-cache.task` (modified)
 

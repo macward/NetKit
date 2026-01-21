@@ -44,10 +44,27 @@ public actor DiskCache {
     }
 
     /// Initializes the cache directory structure and loads the index.
-    /// Must be called after initialization.
+    /// Must be called after initialization when using init() directly.
+    /// Prefer using the static `create()` factory method instead.
     public func setup() async throws {
         try createDirectoryStructure()
         try await loadOrMigrateIndex()
+    }
+
+    /// Creates and initializes a disk cache in one step.
+    /// This is the preferred way to create a DiskCache instance.
+    /// - Parameters:
+    ///   - configuration: The disk cache configuration.
+    ///   - cachePolicy: The cache policy to use. Defaults to HTTPCachePolicy.
+    /// - Returns: A fully initialized DiskCache ready to use.
+    /// - Throws: An error if initialization fails.
+    public static func create(
+        configuration: DiskCacheConfiguration = .default,
+        cachePolicy: CachePolicy = HTTPCachePolicy()
+    ) async throws -> DiskCache {
+        let cache: DiskCache = try DiskCache(configuration: configuration, cachePolicy: cachePolicy)
+        try await cache.setup()
+        return cache
     }
 
     // MARK: - Public API
