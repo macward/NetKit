@@ -1,31 +1,145 @@
 # Task: Disk Cache Implementation
 
-Status: pending
+Status: done
 
 ## Objective
 Implementar cache en disco como complemento al cache en memoria, con políticas de eviction y límites de tamaño.
 
 ## Context
-- Related files: Sources/NetKit/Cache/ResponseCache.swift
-- Dependencies: 001-http-cache-headers.task
+- Related files: Sources/NetKit/Cache/ResponseCache.swift, Sources/NetKit/Cache/CachePolicy.swift
+- Dependencies: 001-http-cache-headers.task (COMPLETADO)
+- Dependencia ya provee: CacheMetadata (Codable), CacheControlDirective (Codable), HTTPCachePolicy, CacheRetrievalResult
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    NetworkClient                         │
+│                         │                                │
+│                         ▼                                │
+│              ┌─────────────────────┐                    │
+│              │   ResponseCache     │ (Fachada)          │
+│              │   (CacheStorage)    │                    │
+│              └─────────┬───────────┘                    │
+│                        │                                │
+│         ┌──────────────┼──────────────┐                │
+│         ▼              ▼              ▼                 │
+│   ┌──────────┐  ┌───────────┐  ┌────────────┐         │
+│   │MemoryCache│  │ DiskCache │  │HybridCache │         │
+│   │  (actor) │  │  (actor)  │  │  (actor)   │         │
+│   └──────────┘  └───────────┘  └────────────┘         │
+└─────────────────────────────────────────────────────────┘
+```
+
+## File Structure
+
+```
+Caches/
+└── com.netkit.cache/
+    ├── index.json          # Metadata de todas las entries
+    ├── entries/
+    │   ├── {hash1}.data    # Response body (comprimido)
+    │   ├── {hash2}.data
+    │   └── ...
+    └── version             # Para migración futura
+```
 
 ## Steps
-1. [ ] Crear enum CacheStorage (memory, disk, hybrid)
-2. [ ] Implementar DiskCache actor con FileManager
-3. [ ] Definir estructura de archivos en cache directory
-4. [ ] Implementar límite de tamaño con eviction LRU real
-5. [ ] Agregar metadata file para tracking de entries
-6. [ ] Implementar hybrid cache (memory first, disk fallback)
-7. [ ] Agregar migración de cache entre versiones
-8. [ ] Implementar cache clearing (por endpoint, por edad, total)
+1. [x] Crear enum CacheStorage (memory, disk, hybrid)
+2. [x] Crear DiskCacheEntry struct con lastAccessedAt para LRU
+3. [x] Implementar DiskCache actor con FileManager
+4. [x] Definir estructura de archivos en cache directory
+5. [x] Implementar serialización de index.json + entries
+6. [x] Implementar límite de tamaño con eviction LRU real
+7. [x] Implementar compression con NSData.compressed(using:)
+8. [x] Implementar hybrid cache (memory first, disk fallback)
+9. [x] Agregar migración de cache entre versiones
+10. [x] Implementar cache clearing (por endpoint, por edad, total)
+11. [x] Tests de persistencia, eviction, y compression
 
 ## Acceptance Criteria
-- [ ] Cache persiste entre sesiones de app
-- [ ] Límite de tamaño se respeta
-- [ ] Eviction LRU funciona correctamente
-- [ ] Hybrid cache usa memoria para hot data
-- [ ] Tests verifican persistencia y eviction
+- [x] Cache persiste entre sesiones de app
+- [x] Límite de tamaño se respeta
+- [x] Eviction LRU funciona correctamente (basado en lastAccessedAt)
+- [x] Hybrid cache usa memoria para hot data
+- [x] Compression reduce tamaño de entries > 1KB
+- [x] Tests verifican persistencia, eviction, y corruption recovery
+
+## Technical Decisions
+
+| Decisión | Valor | Razón |
+|----------|-------|-------|
+| Compression algorithm | LZFSE | Balance CPU/compresión, recomendado por Apple |
+| Compression threshold | 1KB | Evita overhead en entries pequeñas |
+| Size limit | Total con límite por entry | Flexible y predecible |
+| LRU tracking | Persisted en index.json | Sobrevive restart de app |
+| File naming | SHA256 del cache key | Determinístico, sin colisiones |
+| Encryption default | Off (opcional) | Performance por defecto |
+
+## Implementation Notes
+
+### Thread Safety
+```swift
+// FileManager NO es thread-safe para escrituras
+// Solución: DiskCache como actor dedicado
+public actor DiskCache {
+    private let fileManager: FileManager = .default
+    // Todas las operaciones de archivo aisladas en el actor
+}
+```
+
+### Compression
+```swift
+// NSData.compressed(using:) disponible en iOS 13+
+// Usar para entries > 1KB
+let compressed = (data as NSData).compressed(using: .lzfse)
+let decompressed = compressed.decompressed(using: .lzfse)
+```
+
+### Expiration - Integración con HTTP Headers
+El CacheMetadata existente ya tiene:
+- expiresAt: Date?
+- cacheControl: CacheControlDirective?
+- isExpired: Bool (computed)
+- staleWhileRevalidate, staleIfError
+
+Prioridad de eviction:
+1. Expired entries (isExpired == true)
+2. LRU basado en lastAccessedAt
+3. Entries con menor stale window
+
+### Encryption
+```swift
+// NSFileProtectionComplete - datos inaccesibles con device locked
+try data.write(to: url, options: [.atomic, .completeFileProtection])
+```
+
+### Index Structure (index.json)
+```json
+{
+  "version": 1,
+  "entries": {
+    "GET|https://api.com/users|...": {
+      "filename": "a1b2c3d4.data",
+      "metadata": { /* CacheMetadata serializado */ },
+      "size": 1024,
+      "compressed": true,
+      "lastAccessedAt": "2024-01-15T10:30:00Z"
+    }
+  }
+}
+```
+
+## Risks & Mitigations
+
+| Riesgo | Mitigación |
+|--------|------------|
+| Corruption de index.json | Escrituras atómicas + backup del index previo |
+| Disk full | Capturar errores, degradar a memory-only gracefully |
+| Migration futura | Versionar estructura desde el inicio (version file) |
+| Performance I/O | Async file I/O, no bloquear actor innecesariamente |
 
 ## Notes
 - Usar Caches directory para que iOS pueda limpiar si necesita espacio
-- Considerar encryption para datos sensibles
+- Encryption opcional con NSFileProtectionComplete para datos sensibles
+- CacheMetadata y CacheControlDirective ya son Codable (listos para persistir)
