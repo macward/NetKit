@@ -839,3 +839,260 @@ struct DiskCacheErrorTests {
         }
     }
 }
+
+// MARK: - DiskCache Concurrency Tests
+
+@Suite("DiskCache Concurrency Tests")
+struct DiskCacheConcurrencyTests {
+    private func createTestConfiguration() -> DiskCacheConfiguration {
+        DiskCacheConfiguration(
+            maxSize: 10 * 1024 * 1024, // 10MB
+            maxEntrySize: 1 * 1024 * 1024, // 1MB
+            compressionThreshold: 10000, // High to avoid compression
+            useFileProtection: false,
+            directoryName: "com.netkit.cache.concurrency.test.\(UUID().uuidString)"
+        )
+    }
+
+    @Test("Concurrent stores do not lose entries")
+    func concurrentStoresNoLostEntries() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let cache: DiskCache = try await DiskCache.create(configuration: config)
+
+        let entryCount: Int = 50
+
+        // Store entries concurrently
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<entryCount {
+                group.addTask {
+                    let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/concurrent/\(i)")!)
+                    let data: Data = "data-\(i)".data(using: .utf8)!
+                    await cache.store(data: data, for: request, ttl: 3600)
+                }
+            }
+        }
+
+        // Flush to ensure all writes are persisted
+        await cache.flushIndex()
+
+        // Verify all entries exist
+        let count: Int = await cache.count
+        #expect(count == entryCount, "Expected \(entryCount) entries, got \(count)")
+
+        // Verify each entry can be retrieved
+        for i in 0..<entryCount {
+            let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/concurrent/\(i)")!)
+            let retrieved: Data? = await cache.retrieve(for: request)
+            let expected: Data = "data-\(i)".data(using: .utf8)!
+            #expect(retrieved == expected, "Entry \(i) not found or corrupted")
+        }
+    }
+
+    @Test("Concurrent store and retrieve operations are consistent")
+    func concurrentStoreAndRetrieve() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let cache: DiskCache = try await DiskCache.create(configuration: config)
+
+        let operationCount: Int = 100
+
+        // Pre-populate some entries
+        for i in 0..<20 {
+            let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/prepopulated/\(i)")!)
+            let data: Data = "prepopulated-\(i)".data(using: .utf8)!
+            await cache.store(data: data, for: request, ttl: 3600)
+        }
+
+        await cache.flushIndex()
+
+        // Mix of concurrent stores and retrieves
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<operationCount {
+                if i % 2 == 0 {
+                    // Store new entry
+                    group.addTask {
+                        let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/new/\(i)")!)
+                        let data: Data = "new-\(i)".data(using: .utf8)!
+                        await cache.store(data: data, for: request, ttl: 3600)
+                    }
+                } else {
+                    // Retrieve existing entry
+                    group.addTask {
+                        let index: Int = i % 20
+                        let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/prepopulated/\(index)")!)
+                        let _ = await cache.retrieve(for: request)
+                    }
+                }
+            }
+        }
+
+        await cache.flushIndex()
+
+        // Verify prepopulated entries are still intact
+        for i in 0..<20 {
+            let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/prepopulated/\(i)")!)
+            let retrieved: Data? = await cache.retrieve(for: request)
+            let expected: Data = "prepopulated-\(i)".data(using: .utf8)!
+            #expect(retrieved == expected, "Prepopulated entry \(i) corrupted")
+        }
+    }
+
+    @Test("Concurrent store and invalidate operations are safe")
+    func concurrentStoreAndInvalidate() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let cache: DiskCache = try await DiskCache.create(configuration: config)
+
+        let entryCount: Int = 30
+
+        // Concurrent stores and invalidations
+        await withTaskGroup(of: Void.self) { group in
+            // Store entries
+            for i in 0..<entryCount {
+                group.addTask {
+                    let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/mixed/\(i)")!)
+                    let data: Data = "mixed-\(i)".data(using: .utf8)!
+                    await cache.store(data: data, for: request, ttl: 3600)
+                }
+            }
+
+            // Invalidate some entries concurrently
+            for i in stride(from: 0, to: entryCount, by: 3) {
+                group.addTask {
+                    // Small delay to allow some stores to complete
+                    try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                    let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/mixed/\(i)")!)
+                    await cache.invalidate(for: request)
+                }
+            }
+        }
+
+        await cache.flushIndex()
+
+        // Verify invalidated entries are gone and others remain
+        for i in 0..<entryCount {
+            let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/mixed/\(i)")!)
+            let retrieved: Data? = await cache.retrieve(for: request)
+
+            if i % 3 == 0 {
+                // Should be invalidated
+                #expect(retrieved == nil, "Entry \(i) should have been invalidated")
+            } else {
+                // Should still exist
+                let expected: Data = "mixed-\(i)".data(using: .utf8)!
+                #expect(retrieved == expected, "Entry \(i) should still exist")
+            }
+        }
+    }
+
+    @Test("Rapid sequential writes are coalesced correctly")
+    func rapidWritesCoalesced() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let cache: DiskCache = try await DiskCache.create(configuration: config)
+
+        // Perform many rapid stores (should be coalesced)
+        for i in 0..<100 {
+            let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/rapid/\(i)")!)
+            let data: Data = "rapid-\(i)".data(using: .utf8)!
+            await cache.store(data: data, for: request, ttl: 3600)
+        }
+
+        // Flush to ensure final state is written
+        await cache.flushIndex()
+
+        // Verify all entries exist despite rapid writes
+        let count: Int = await cache.count
+        #expect(count == 100)
+
+        // Verify last entry is correct
+        let lastRequest: URLRequest = URLRequest(url: URL(string: "https://api.example.com/rapid/99")!)
+        let lastData: Data? = await cache.retrieve(for: lastRequest)
+        #expect(lastData == "rapid-99".data(using: .utf8)!)
+    }
+
+    @Test("High-frequency operations stress test")
+    func highFrequencyStressTest() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let cache: DiskCache = try await DiskCache.create(configuration: config)
+
+        let operationsPerTask: Int = 50
+        let taskCount: Int = 10
+
+        await withTaskGroup(of: Void.self) { group in
+            for taskIndex in 0..<taskCount {
+                group.addTask {
+                    for opIndex in 0..<operationsPerTask {
+                        let key: Int = taskIndex * operationsPerTask + opIndex
+                        let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/stress/\(key)")!)
+                        let data: Data = "stress-\(key)".data(using: .utf8)!
+
+                        // Mix of operations
+                        switch opIndex % 4 {
+                        case 0:
+                            await cache.store(data: data, for: request, ttl: 3600)
+                        case 1:
+                            let _ = await cache.retrieve(for: request)
+                        case 2:
+                            let _ = await cache.retrieveWithMetadata(for: request)
+                        case 3:
+                            await cache.store(data: data, for: request, ttl: 3600)
+                            let _ = await cache.retrieve(for: request)
+                        default:
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        await cache.flushIndex()
+
+        // Cache should be in a consistent state (no crash, no data loss for stored items)
+        let count: Int = await cache.count
+        #expect(count > 0, "Cache should have entries after stress test")
+
+        // Verify we can still perform operations
+        let testRequest: URLRequest = URLRequest(url: URL(string: "https://api.example.com/post-stress")!)
+        let testData: Data = "post-stress".data(using: .utf8)!
+        let stored: Bool = await cache.store(data: testData, for: testRequest, ttl: 3600)
+        #expect(stored == true)
+    }
+
+    @Test("Index persistence survives reload after concurrent operations")
+    func indexPersistsSurvivesReload() async throws {
+        let config: DiskCacheConfiguration = createTestConfiguration()
+        let entryCount: Int = 25
+
+        // First cache instance - perform concurrent operations
+        let cache1: DiskCache = try await DiskCache.create(configuration: config)
+
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<entryCount {
+                group.addTask {
+                    let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/persist/\(i)")!)
+                    let data: Data = "persist-\(i)".data(using: .utf8)!
+                    await cache1.store(data: data, for: request, ttl: 3600)
+                }
+            }
+        }
+
+        // Wait for all fire-and-forget Tasks from concurrent stores to reach the coordinator.
+        // The coalesce interval is 100ms, so we wait 150ms to ensure all writes are scheduled.
+        try await Task.sleep(nanoseconds: 150_000_000) // 150ms
+
+        // Now flush to force immediate write (bypasses remaining coalesce delay)
+        await cache1.flushIndex()
+
+        // Create new cache instance with same configuration (simulates app restart)
+        let cache2: DiskCache = try await DiskCache.create(configuration: config)
+
+        // Verify all entries are present
+        let count: Int = await cache2.count
+        #expect(count == entryCount, "Expected \(entryCount) entries after reload, got \(count)")
+
+        for i in 0..<entryCount {
+            let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/persist/\(i)")!)
+            let retrieved: Data? = await cache2.retrieve(for: request)
+            let expected: Data = "persist-\(i)".data(using: .utf8)!
+            #expect(retrieved == expected, "Entry \(i) not found after reload")
+        }
+    }
+}
