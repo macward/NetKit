@@ -26,6 +26,10 @@ public protocol Endpoint: Sendable {
 
     /// Cache policy for this endpoint. Defaults to respecting HTTP cache headers.
     var cachePolicy: EndpointCachePolicy { get }
+
+    /// Deduplication policy for this endpoint. Controls whether identical concurrent requests
+    /// are deduplicated (sharing a single network call). Defaults to `.automatic`.
+    var deduplicationPolicy: DeduplicationPolicy { get }
 }
 
 public extension Endpoint {
@@ -34,6 +38,7 @@ public extension Endpoint {
     var body: (any Encodable & Sendable)? { nil }
     var cacheTTL: TimeInterval? { nil }
     var cachePolicy: EndpointCachePolicy { .respectHeaders }
+    var deduplicationPolicy: DeduplicationPolicy { .automatic }
 }
 
 // MARK: - Endpoint Cache Policy

@@ -15,6 +15,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private let requestTracker: InFlightRequestTracker = InFlightRequestTracker()
 
     /// Creates a network client.
     /// - Parameters:
@@ -110,6 +111,145 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         }
 
         let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
+
+        // Check if we should deduplicate this request
+        if shouldDeduplicate(endpoint: endpoint) {
+            let requestKey: RequestKey = RequestKey(from: urlRequest)
+
+            // Capture immutable copies to avoid data races in detached task
+            let finalRequest: URLRequest = urlRequest
+            let finalCachedData: Data? = cachedData
+            let finalCachedMetadata: CacheMetadata? = cachedMetadata
+
+            // Atomically get existing task or create a new one to prevent race conditions.
+            // Use Task.detached to isolate from caller's cancellation and task-local values.
+            // The shared request should complete independently even if one caller cancels.
+            let task: Task<Data, Error> = await requestTracker.getOrCreate(for: requestKey) {
+                Task.detached { [self] in
+                    try await performDeduplicatedRequest(
+                        urlRequest: finalRequest,
+                        endpoint: endpoint,
+                        cachedData: finalCachedData,
+                        cachedMetadata: finalCachedMetadata,
+                        requestSnapshot: requestSnapshot
+                    )
+                }
+            }
+
+            do {
+                let data: Data = try await task.value
+                await requestTracker.remove(key: requestKey)
+                return try decodeResponse(data, for: endpoint, request: requestSnapshot, response: nil)
+            } catch {
+                await requestTracker.remove(key: requestKey)
+                throw error
+            }
+        }
+
+        // Non-deduplicated path (mutations or .never policy)
+        return try await performNonDeduplicatedRequest(
+            urlRequest: urlRequest,
+            endpoint: endpoint,
+            cachedData: cachedData,
+            cachedMetadata: cachedMetadata,
+            requestSnapshot: requestSnapshot
+        )
+    }
+
+    /// Determines if the request should be deduplicated based on endpoint policy and HTTP method.
+    private func shouldDeduplicate<E: Endpoint>(endpoint: E) -> Bool {
+        switch endpoint.deduplicationPolicy {
+        case .always:
+            return true
+        case .never:
+            return false
+        case .automatic:
+            return endpoint.method == .get
+        }
+    }
+
+    /// Performs a request that participates in deduplication. Returns raw Data for sharing.
+    private func performDeduplicatedRequest<E: Endpoint>(
+        urlRequest: URLRequest,
+        endpoint: E,
+        cachedData: Data?,
+        cachedMetadata: CacheMetadata?,
+        requestSnapshot: RequestSnapshot
+    ) async throws -> Data {
+        var lastError: Error?
+        let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
+
+        for attempt in 0..<maxAttempts {
+            do {
+                if attempt > 0, let policy = retryPolicy {
+                    let delay: TimeInterval = policy.delay(for: attempt - 1)
+                    if delay > 0 {
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    }
+                }
+
+                let (data, response): (Data, HTTPURLResponse) = try await performRequest(urlRequest)
+
+                if response.statusCode == HTTPStatusCode.notModified, let cachedData, let cache {
+                    await cache.updateAfterRevalidation(for: urlRequest, response: response)
+                    return cachedData
+                }
+
+                var responseData: Data = data
+                for interceptor in interceptors.reversed() {
+                    responseData = try await interceptor.intercept(response: response, data: responseData)
+                }
+
+                try validateResponse(response, request: requestSnapshot, data: responseData)
+
+                if endpoint.method == .get, let cache {
+                    await cacheResponse(
+                        data: responseData,
+                        request: urlRequest,
+                        response: response,
+                        endpoint: endpoint,
+                        cache: cache
+                    )
+                }
+
+                return responseData
+
+            } catch {
+                if let networkError = error as? NetworkError,
+                   networkError.kind.isServerError,
+                   let cachedData,
+                   let cachedMetadata,
+                   let staleIfError = cachedMetadata.cacheControl?.staleIfError,
+                   cachedMetadata.isStaleButRevalidatable(within: staleIfError) {
+                    return cachedData
+                }
+
+                lastError = error
+
+                if let policy = retryPolicy,
+                   let networkError = error as? NetworkError,
+                   policy.shouldRetry(error: networkError, attempt: attempt) {
+                    continue
+                }
+
+                throw error
+            }
+        }
+
+        throw lastError ?? NetworkError.unknown(
+            request: requestSnapshot,
+            underlyingError: NSError(domain: "NetKit", code: -1)
+        )
+    }
+
+    /// Performs a request without deduplication (for mutations or .never policy).
+    private func performNonDeduplicatedRequest<E: Endpoint>(
+        urlRequest: URLRequest,
+        endpoint: E,
+        cachedData: Data?,
+        cachedMetadata: CacheMetadata?,
+        requestSnapshot: RequestSnapshot
+    ) async throws -> E.Response {
         var lastError: Error?
         let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
 
