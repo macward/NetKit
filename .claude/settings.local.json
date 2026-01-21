@@ -12,7 +12,8 @@
       "Bash(git push -u origin task/002-network-error-context)",
       "Bash(cd:*)",
       "Bash(git push:*)",
-      "Bash(gh pr create:*)"
+      "Bash(gh pr create:*)",
+      "WebSearch"
     ]
   }
 }

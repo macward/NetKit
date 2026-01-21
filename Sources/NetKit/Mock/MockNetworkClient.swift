@@ -8,6 +8,9 @@ public actor MockNetworkClient: NetworkClientProtocol {
     private var callCounts: [ObjectIdentifier: Int] = [:]
     private var calledEndpoints: [ObjectIdentifier: [Any]] = [:]
     private var sequenceStubs: [ObjectIdentifier: SequenceStub] = [:]
+    private var uploadStubs: [ObjectIdentifier: Any] = [:]
+    private var downloadStubs: [ObjectIdentifier: URL] = [:]
+    private var progressSequences: [ObjectIdentifier: [TransferProgress]] = [:]
 
     /// Internal struct to track sequence-based stubs
     private struct SequenceStub {
@@ -223,6 +226,175 @@ public actor MockNetworkClient: NetworkClientProtocol {
 
     private func stubKey<E: Endpoint>(for type: E.Type) -> ObjectIdentifier {
         ObjectIdentifier(type)
+    }
+
+    // MARK: - Upload/Download Stubbing
+
+    /// Stubs an upload response for an endpoint type.
+    /// - Parameters:
+    ///   - type: The endpoint type to stub.
+    ///   - progressSequence: Optional sequence of progress updates to emit.
+    ///   - response: A closure that returns the response for a given endpoint.
+    public func stubUpload<E: Endpoint>(
+        _ type: E.Type,
+        progressSequence: [TransferProgress] = [],
+        response: @escaping @Sendable (E) -> E.Response
+    ) {
+        let key: ObjectIdentifier = stubKey(for: type)
+        uploadStubs[key] = response
+        if !progressSequence.isEmpty {
+            progressSequences[key] = progressSequence
+        }
+    }
+
+    /// Stubs a download response for an endpoint type.
+    /// - Parameters:
+    ///   - type: The endpoint type to stub.
+    ///   - progressSequence: Optional sequence of progress updates to emit.
+    ///   - destinationURL: The URL to return as the download destination.
+    public func stubDownload<E: Endpoint>(
+        _ type: E.Type,
+        progressSequence: [TransferProgress] = [],
+        destinationURL: URL
+    ) {
+        let key: ObjectIdentifier = stubKey(for: type)
+        downloadStubs[key] = destinationURL
+        if !progressSequence.isEmpty {
+            progressSequences[key] = progressSequence
+        }
+    }
+
+    // MARK: - Upload Methods
+
+    public nonisolated func upload<E: Endpoint>(file: URL, to endpoint: E) -> UploadResult<E.Response> {
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
+
+        let responseTask: Task<E.Response, Error> = Task {
+            try await performMockUpload(endpoint: endpoint, continuation: continuation)
+        }
+
+        return UploadResult(
+            progress: TransferProgressStream(stream: stream),
+            response: responseTask
+        )
+    }
+
+    public nonisolated func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) -> UploadResult<E.Response> {
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
+
+        let responseTask: Task<E.Response, Error> = Task {
+            try await performMockUpload(endpoint: endpoint, continuation: continuation)
+        }
+
+        return UploadResult(
+            progress: TransferProgressStream(stream: stream),
+            response: responseTask
+        )
+    }
+
+    private func performMockUpload<E: Endpoint>(
+        endpoint: E,
+        continuation: AsyncStream<TransferProgress>.Continuation
+    ) async throws -> E.Response {
+        let key: ObjectIdentifier = stubKey(for: E.self)
+
+        callCounts[key, default: 0] += 1
+        if calledEndpoints[key] == nil {
+            calledEndpoints[key] = [E]()
+        }
+        var endpoints = calledEndpoints[key] as! [E]
+        endpoints.append(endpoint)
+        calledEndpoints[key] = endpoints
+
+        if let progressSeq = progressSequences[key] {
+            for progress in progressSeq {
+                continuation.yield(progress)
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }
+
+        if let delay = delays[key], delay > 0 {
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+
+        if let error = errorStubs[key] {
+            continuation.finish()
+            throw error
+        }
+
+        if let responseClosure = uploadStubs[key] as? @Sendable (E) -> E.Response {
+            let response: E.Response = responseClosure(endpoint)
+            continuation.yield(TransferProgress.completed(totalBytes: 1000))
+            continuation.finish()
+            return response
+        }
+
+        if let responseClosure = stubs[key] as? @Sendable (E) -> E.Response {
+            let response: E.Response = responseClosure(endpoint)
+            continuation.yield(TransferProgress.completed(totalBytes: 1000))
+            continuation.finish()
+            return response
+        }
+
+        continuation.finish()
+        throw MockError.noStubConfigured(endpoint: String(describing: E.self))
+    }
+
+    // MARK: - Download Methods
+
+    public nonisolated func download<E: Endpoint>(from endpoint: E, to destination: URL) -> DownloadResult {
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
+
+        let responseTask: Task<URL, Error> = Task {
+            try await performMockDownload(endpoint: endpoint, destination: destination, continuation: continuation)
+        }
+
+        return DownloadResult(
+            progress: TransferProgressStream(stream: stream),
+            response: responseTask
+        )
+    }
+
+    private func performMockDownload<E: Endpoint>(
+        endpoint: E,
+        destination: URL,
+        continuation: AsyncStream<TransferProgress>.Continuation
+    ) async throws -> URL {
+        let key: ObjectIdentifier = stubKey(for: E.self)
+
+        callCounts[key, default: 0] += 1
+        if calledEndpoints[key] == nil {
+            calledEndpoints[key] = [E]()
+        }
+        var endpoints = calledEndpoints[key] as! [E]
+        endpoints.append(endpoint)
+        calledEndpoints[key] = endpoints
+
+        if let progressSeq = progressSequences[key] {
+            for progress in progressSeq {
+                continuation.yield(progress)
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }
+
+        if let delay = delays[key], delay > 0 {
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+
+        if let error = errorStubs[key] {
+            continuation.finish()
+            throw error
+        }
+
+        if let stubURL = downloadStubs[key] {
+            continuation.yield(TransferProgress.completed(totalBytes: 1000))
+            continuation.finish()
+            return stubURL
+        }
+
+        continuation.yield(TransferProgress.completed(totalBytes: 1000))
+        continuation.finish()
+        return destination
     }
 }
 

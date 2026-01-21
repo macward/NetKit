@@ -288,8 +288,9 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         request: RequestSnapshot,
         response: ResponseSnapshot?
     ) throws -> E.Response {
-        if E.Response.self == EmptyResponse.self {
-            return EmptyResponse() as! E.Response
+        if E.Response.self == EmptyResponse.self,
+           let emptyResponse = EmptyResponse() as? E.Response {
+            return emptyResponse
         }
 
         do {
@@ -314,6 +315,275 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             return .invalidURL(request: request, underlyingError: error)
         default:
             return .unknown(request: request, underlyingError: error)
+        }
+    }
+}
+
+// MARK: - Upload & Download
+
+extension NetworkClient {
+    /// Uploads a file to the specified endpoint with progress tracking.
+    /// - Parameters:
+    ///   - file: The URL of the file to upload.
+    ///   - endpoint: The endpoint to upload to.
+    /// - Returns: An `UploadResult` containing progress stream and response task.
+    public func upload<E: Endpoint>(file: URL, to endpoint: E) -> UploadResult<E.Response> {
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
+
+        let responseTask: Task<E.Response, Error> = Task {
+            try await performUpload(
+                endpoint: endpoint,
+                fileURL: file,
+                formData: nil,
+                continuation: continuation
+            )
+        }
+
+        return UploadResult(
+            progress: TransferProgressStream(stream: stream),
+            response: responseTask
+        )
+    }
+
+    /// Uploads multipart form data to the specified endpoint with progress tracking.
+    /// - Parameters:
+    ///   - formData: The multipart form data to upload.
+    ///   - endpoint: The endpoint to upload to.
+    /// - Returns: An `UploadResult` containing progress stream and response task.
+    public func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) -> UploadResult<E.Response> {
+        let encodedFormData: EncodedMultipartFormData = EncodedMultipartFormData(from: formData)
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
+
+        let responseTask: Task<E.Response, Error> = Task {
+            try await performUpload(
+                endpoint: endpoint,
+                fileURL: nil,
+                formData: encodedFormData,
+                continuation: continuation
+            )
+        }
+
+        return UploadResult(
+            progress: TransferProgressStream(stream: stream),
+            response: responseTask
+        )
+    }
+
+    /// Downloads a file from the specified endpoint with progress tracking.
+    ///
+    /// - Note: Downloads do not support automatic retry. If a download fails, you must
+    ///   initiate a new download request. This is because download tasks write directly
+    ///   to disk and partial downloads cannot be safely resumed with the current implementation.
+    ///
+    /// - Parameters:
+    ///   - endpoint: The endpoint to download from.
+    ///   - destination: The URL where the file should be saved.
+    /// - Returns: A `DownloadResult` containing progress stream and response task.
+    public func download<E: Endpoint>(from endpoint: E, to destination: URL) -> DownloadResult {
+        let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
+
+        let responseTask: Task<URL, Error> = Task {
+            try await performDownload(
+                endpoint: endpoint,
+                destination: destination,
+                continuation: continuation
+            )
+        }
+
+        return DownloadResult(
+            progress: TransferProgressStream(stream: stream),
+            response: responseTask
+        )
+    }
+
+    // MARK: - Private Upload Implementation
+
+    private func performUpload<E: Endpoint>(
+        endpoint: E,
+        fileURL: URL?,
+        formData: EncodedMultipartFormData?,
+        continuation: AsyncStream<TransferProgress>.Continuation
+    ) async throws -> E.Response {
+        // Validate file exists before attempting upload
+        if let fileURL {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                continuation.finish()
+                throw NetworkError.invalidURL(
+                    request: nil,
+                    underlyingError: NSError(
+                        domain: "NetKit",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "File does not exist at path: \(fileURL.path)"]
+                    )
+                )
+            }
+        }
+
+        var urlRequest: URLRequest = try URLRequest(
+            endpoint: endpoint,
+            environment: environment,
+            additionalHeaders: [:],
+            timeoutOverride: nil,
+            encoder: encoder
+        )
+
+        for interceptor in interceptors {
+            urlRequest = try await interceptor.intercept(request: urlRequest)
+        }
+
+        if let formData {
+            urlRequest.setValue(formData.contentType, forHTTPHeaderField: "Content-Type")
+        }
+
+        let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
+        let delegate: UploadProgressDelegate = UploadProgressDelegate(continuation: continuation)
+        let uploadSession: URLSession = URLSession(
+            configuration: session.configuration,
+            delegate: delegate,
+            delegateQueue: nil
+        )
+
+        defer {
+            uploadSession.finishTasksAndInvalidate()
+        }
+
+        var lastError: Error?
+        let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
+
+        for attempt in 0..<maxAttempts {
+            do {
+                if attempt > 0 {
+                    delegate.reset()
+
+                    if let policy = retryPolicy {
+                        let delay: TimeInterval = policy.delay(for: attempt - 1)
+                        if delay > 0 {
+                            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        }
+                    }
+                }
+
+                let (data, response): (Data, URLResponse)
+
+                if let fileURL {
+                    (data, response) = try await uploadSession.upload(for: urlRequest, fromFile: fileURL)
+                } else if let formData {
+                    (data, response) = try await uploadSession.upload(for: urlRequest, from: formData.data)
+                } else {
+                    throw NetworkError.unknown(
+                        request: requestSnapshot,
+                        underlyingError: NSError(
+                            domain: "NetKit",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "No upload data provided"]
+                        )
+                    )
+                }
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw NetworkError.unknown(
+                        request: requestSnapshot,
+                        underlyingError: NSError(
+                            domain: "NetKit",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Invalid response type"]
+                        )
+                    )
+                }
+
+                let responseSnapshot: ResponseSnapshot = ResponseSnapshot(response: httpResponse, data: data)
+
+                var responseData: Data = data
+                for interceptor in interceptors.reversed() {
+                    responseData = try await interceptor.intercept(response: httpResponse, data: responseData)
+                }
+
+                try validateResponse(httpResponse, request: requestSnapshot, data: responseData)
+
+                return try decodeResponse(responseData, for: endpoint, request: requestSnapshot, response: responseSnapshot)
+
+            } catch let urlError as URLError {
+                let networkError: NetworkError = mapURLError(urlError, request: requestSnapshot)
+                lastError = networkError
+
+                if let policy = retryPolicy, policy.shouldRetry(error: networkError, attempt: attempt) {
+                    continue
+                }
+                throw networkError
+
+            } catch let networkError as NetworkError {
+                lastError = networkError
+
+                if let policy = retryPolicy, policy.shouldRetry(error: networkError, attempt: attempt) {
+                    continue
+                }
+                throw networkError
+
+            } catch {
+                lastError = error
+                throw NetworkError.unknown(request: requestSnapshot, underlyingError: error)
+            }
+        }
+
+        throw lastError ?? NetworkError.unknown(
+            request: requestSnapshot,
+            underlyingError: NSError(domain: "NetKit", code: -1)
+        )
+    }
+
+    // MARK: - Private Download Implementation
+
+    private func performDownload<E: Endpoint>(
+        endpoint: E,
+        destination: URL,
+        continuation: AsyncStream<TransferProgress>.Continuation
+    ) async throws -> URL {
+        var urlRequest: URLRequest = try URLRequest(
+            endpoint: endpoint,
+            environment: environment,
+            additionalHeaders: [:],
+            timeoutOverride: nil,
+            encoder: encoder
+        )
+
+        for interceptor in interceptors {
+            urlRequest = try await interceptor.intercept(request: urlRequest)
+        }
+
+        let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
+
+        return try await withCheckedThrowingContinuation { checkedContinuation in
+            let delegate: DownloadProgressDelegate = DownloadProgressDelegate(
+                destination: destination,
+                continuation: continuation
+            ) { result in
+                switch result {
+                case .success(let url):
+                    checkedContinuation.resume(returning: url)
+                case .failure(let error):
+                    if let urlError = error as? URLError {
+                        let networkError: NetworkError = self.mapURLError(urlError, request: requestSnapshot)
+                        checkedContinuation.resume(throwing: networkError)
+                    } else if let networkError = error as? NetworkError {
+                        checkedContinuation.resume(throwing: networkError)
+                    } else {
+                        checkedContinuation.resume(throwing: NetworkError.unknown(
+                            request: requestSnapshot,
+                            underlyingError: error
+                        ))
+                    }
+                }
+            }
+
+            let downloadSession: URLSession = URLSession(
+                configuration: session.configuration,
+                delegate: delegate,
+                delegateQueue: nil
+            )
+            delegate.setSession(downloadSession)
+
+            let task: URLSessionDownloadTask = downloadSession.downloadTask(with: urlRequest)
+            task.resume()
         }
     }
 }
