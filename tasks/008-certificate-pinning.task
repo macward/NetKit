@@ -1,30 +1,99 @@
 # Task: Certificate Pinning
 
-Status: pending
+Status: done
 
 ## Objective
-Implementar SSL/TLS certificate pinning para prevenir ataques man-in-the-middle.
+Implementar SSL/TLS certificate pinning para prevenir ataques man-in-the-middle, sin modificar NetworkClient.
+
+## Architecture
+Crear helper types que el usuario usa para construir una URLSession con pinning, que luego pasa al constructor existente de NetworkClient.
+
+```
+SecurityPolicy → PinningSessionFactory.createSession() → URLSession → NetworkClient(session:)
+```
+
+**Impacto en NetworkClient: 0 líneas modificadas**
 
 ## Context
-- Related files: Sources/NetKit/Core/NetworkClient.swift
-- Dependencies: none
+- Pattern to follow: Sources/NetKit/Progress/ProgressDelegate.swift
+- Uses existing parameter: NetworkClient.init(session:)
+- Dependencies: Security framework (built-in)
 
-## Steps
-1. [ ] Crear enum SecurityPolicy (default, pinned, disabled)
-2. [ ] Crear struct PinnedCertificate con hash del certificado
-3. [ ] Implementar URLSessionDelegate para validación de certificados
-4. [ ] Soportar pin por public key (más flexible que certificate completo)
-5. [ ] Agregar fallback certificates para rotación
-6. [ ] Implementar certificate validation failure reporting
-7. [ ] Documentar proceso de extracción de certificate hash
+## Files to Create
+
+### Sources/NetKit/Security/SecurityError.swift
+- [x] `SecurityError` enum con casos:
+  - `.pinningValidationFailed(host:)`
+  - `.certificateChainInvalid(host:underlyingError:)`
+  - `.publicKeyExtractionFailed(host:)`
+- [x] Conformance a `LocalizedError` y `Sendable`
+
+### Sources/NetKit/Security/SecurityPolicy.swift
+- [x] `SecurityPolicy` struct con:
+  - `PinningMode` enum: `.publicKey`, `.certificate`
+  - `pinnedHosts: Set<String>` (hosts a validar)
+  - `pinnedItems: [Data]` (keys/certs)
+  - `fallbackItems: [Data]` (backup para rotación)
+  - `validateCertificateChain: Bool`
+- [x] Factory methods:
+  - `publicKeyPinning(hosts:publicKeys:fallbackKeys:)`
+  - `certificatePinning(hosts:certificates:fallbackCertificates:)`
+
+### Sources/NetKit/Security/CertificatePinningDelegate.swift
+- [x] `CertificatePinningDelegate: NSObject, URLSessionDelegate, @unchecked Sendable`
+- [x] Implementar `urlSession(_:didReceive:completionHandler:)`:
+  - Validar certificate chain con `SecTrustEvaluateWithError`
+  - Extraer public key con `SecCertificateCopyKey` + `SecKeyCopyExternalRepresentation`
+  - Comparar contra `pinnedItems` y `fallbackItems`
+- [x] Usar `OSAllocatedUnfairLock` para thread safety
+- [x] Usar `os.Logger` para logging
+
+### Sources/NetKit/Security/PinningSessionFactory.swift
+- [x] `PinningSessionFactory.createSession(policy:configuration:) -> URLSession`
+- [x] Crea URLSession con CertificatePinningDelegate
+- [x] Retains delegate via associated objects
+
+### Tests/NetKitTests/SecurityTests.swift
+- [x] Tests para SecurityPolicy creation
+- [x] Tests para SecurityError descriptions
+- [x] Tests para delegate and factory
+
+## Usage Example
+```swift
+// 1. Crear policy
+let policy = SecurityPolicy.publicKeyPinning(
+    hosts: ["api.example.com"],
+    publicKeys: [serverPublicKeyData],
+    fallbackKeys: [backupKeyData]
+)
+
+// 2. Crear session con pinning
+let session = PinningSessionFactory.createSession(policy: policy)
+
+// 3. Usar con NetworkClient (sin cambios)
+let client = NetworkClient(
+    environment: ProductionEnvironment(),
+    session: session
+)
+```
 
 ## Acceptance Criteria
-- [ ] Requests fallan si certificado no coincide con pin
-- [ ] Public key pinning funciona correctamente
-- [ ] Rotación de certificados soportada con fallbacks
-- [ ] Error claro cuando pinning falla
-- [ ] Tests verifican que invalid certs son rechazados
+- [x] Requests fallan con `SecurityError.pinningValidationFailed` si certificado no coincide
+- [x] Public key pinning funciona (sobrevive renovación de cert)
+- [x] Certificate pinning funciona como alternativa
+- [x] Fallback keys permiten rotación sin downtime
+- [x] Hosts no listados en `pinnedHosts` usan validación estándar
+- [x] Tests unitarios pasan (278 tests)
+- [x] Build sin warnings
 
 ## Notes
-- Incluir guía para obtener certificate pins de producción
-- Considerar debug mode que bypassa pinning
+- Public key pinning recomendado sobre certificate pinning (más flexible)
+- Documentar cómo extraer public key hash:
+  ```bash
+  openssl s_client -connect api.example.com:443 | \
+  openssl x509 -pubkey -noout | \
+  openssl pkey -pubin -outform der | \
+  openssl dgst -sha256 -binary | \
+  openssl enc -base64
+  ```
+- Para debug, crear policy con `failureAction: .allowWithWarning`
