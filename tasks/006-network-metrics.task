@@ -1,30 +1,123 @@
 # Task: Network Metrics and Telemetry
 
-Status: pending
+Status: done
 
 ## Objective
 Agregar sistema de métricas para tracking de request duration, success/failure rates, y integración con sistemas de analytics.
 
 ## Context
-- Related files: Sources/NetKit/Core/NetworkClient.swift
+- Related files:
+  - Sources/NetKit/Core/NetworkClient.swift (integration point: `performRequest`)
+  - Sources/NetKit/Core/NetworkClientProtocol.swift (protocol update)
+  - Sources/NetKit/Progress/ProgressDelegate.swift (patrón de referencia: `TransferMetrics`)
+  - Sources/NetKit/Models/NetworkError.swift (ya tiene `timestamp`)
 - Dependencies: none
 
 ## Steps
-1. [ ] Crear protocolo NetworkMetrics con método recordRequest
-2. [ ] Definir RequestMetric struct (endpoint, method, duration, statusCode, error, timestamp)
-3. [ ] Implementar medición de request duration en NetworkClient
-4. [ ] Crear DefaultNetworkMetrics que loggea a console (para desarrollo)
-5. [ ] Hacer NetworkMetrics inyectable en NetworkClient
-6. [ ] Agregar hooks para integración con third parties (Firebase, DataDog, Sentry)
-7. [ ] Implementar agregación básica (average latency, error rate)
+
+### Fase 1: Core Metrics
+1. [x] Crear `MetricsCollector` protocol con método `collect(metrics:)` en `Sources/NetKit/Metrics/`
+2. [x] Definir `NetworkRequestMetrics` struct (endpoint, method, startTime, endTime, statusCode, isSuccess, error, attempt, wasFromCache)
+3. [x] Definir `EndpointMetadata` struct (path, method, deduplicationKey)
+4. [x] Agregar `metricsCollector: MetricsCollector?` como parámetro opcional en `NetworkClient.init`
+5. [x] Implementar captura de timing en `performRequest` usando `Date` (pre/post request)
+6. [x] Propagar contador de `attempt` a través del retry loop
+7. [x] Manejar caso de deduplication (solo contar tiempo real de network)
+8. [x] Crear `ConsoleMetricsCollector` para desarrollo/debugging
+9. [x] Actualizar `NetworkClientProtocol` para incluir soporte de metrics
+10. [x] Escribir tests con `MockMetricsCollector`
+
+### Fase 2: Upload/Download Metrics
+11. [x] Extender métricas para operaciones de upload
+12. [x] Extender métricas para operaciones de download
+13. [x] Integrar con `TransferMetrics` existente si aplica
+
+### Fase 3: Documentación
+14. [x] Documentar cómo crear collectors custom
+15. [x] Agregar ejemplos de integración con Firebase/DataDog/Sentry (sin incluir como dependencias)
 
 ## Acceptance Criteria
-- [ ] Cada request registra duration, status, y resultado
-- [ ] Métricas incluyen información del endpoint
-- [ ] Sistema es extensible para diferentes backends de analytics
-- [ ] No impacta performance significativamente
-- [ ] Tests verifican que métricas se registran correctamente
+- [x] Cada request registra startTime, endTime, duration, statusCode, y resultado (success/error)
+- [x] Métricas incluyen información del endpoint (path, method)
+- [x] Métricas trackan retry attempts individuales
+- [x] Requests deduplicados reportan `wasDeduplicatedRequest: true` para requests que esperaron
+- [x] `MetricsCollector` es opcional e inyectable (no rompe API existente)
+- [x] Sistema es extensible para diferentes backends de analytics
+- [x] No impacta performance significativamente (solo `Date` capture + struct allocation)
+- [x] Tests verifican que métricas se registran correctamente en success, failure, retry, y cache scenarios
+- [x] `MockNetworkClient` soporta metrics collector
 
 ## Notes
-- Usar URLSessionTaskMetrics para datos precisos de timing
+- **Fase 1 usa `Date`-based timing** (suficiente para mayoría de casos)
+- **URLSessionTaskMetrics queda como Fase 4 futura** (requiere refactor a delegate-based session)
 - Considerar sampling para apps de alto tráfico
+- No incluir SDKs de terceros como dependencias - usuarios implementan sus propios collectors
+
+---
+
+## Feasibility Analysis (2026-01-21)
+
+### Veredicto: ALTA VIABILIDAD
+
+La arquitectura actual de NetKit soporta bien la adición de un sistema de métricas.
+
+### Puntos a Favor
+
+| Aspecto | Estado |
+|---------|--------|
+| Arquitectura inyectable | ✓ NetworkClient ya acepta `URLSession`, `Interceptor[]`, `RetryPolicy`, `ResponseCache` |
+| Patrón thread-safe establecido | ✓ `OSAllocatedUnfairLock` usado en `ProgressDelegate.swift` |
+| Sin dependencias externas | ✓ `URLSessionTaskMetrics` es Foundation nativo |
+| Tipos ya `Sendable` | ✓ Compatible con Swift 6 concurrency |
+| Precedente de timing | ✓ `TransferMetrics` en Progress ya hace tracking de velocidad |
+
+### Desafíos Identificados
+
+| Desafío | Impacto | Mitigación |
+|---------|---------|------------|
+| **URLSessionTaskMetrics requiere delegate** | El código actual usa `session.data(for:)` que no expone métricas detalladas | Fase 1: usar `Date`-based timing. Fase 2: migrar a delegate opcional |
+| **Múltiples URLSession** | Regular, upload y download crean sesiones diferentes | Instrumentar cada path por separado |
+| **Retry loop** | Necesita trackear intentos individuales vs total | Pasar contador de attempts por el loop |
+| **Deduplication** | Requests compartidos = ¿métricas duplicadas? | Solo contar tiempo real de network, no wait time |
+
+### Enfoque Recomendado
+
+**Crear `MetricsCollector` separado de `Interceptor`** (los interceptors mutan requests, las métricas observan):
+
+```swift
+public protocol MetricsCollector: Sendable {
+    func collect(metrics: NetworkRequestMetrics) async
+}
+
+public struct NetworkRequestMetrics: Sendable {
+    let endpoint: EndpointMetadata     // path, method
+    let startTime: Date
+    let endTime: Date
+    let statusCode: Int?
+    let isSuccess: Bool
+    let error: NetworkError?
+    let attempt: Int                   // retry tracking
+    let wasFromCache: Bool
+}
+```
+
+**Integración en `NetworkClient.swift:116-160`** (donde está `performRequest`):
+1. Capturar `startTime` antes de `session.data()`
+2. Capturar `endTime` después de response/error
+3. Llamar `await metricsCollector?.collect(metrics:)`
+
+### Fases de Implementación
+
+| Fase | Scope | Complejidad |
+|------|-------|-------------|
+| **1. Core Metrics** | Protocol + struct + hooks en `performRequest` | Baja |
+| **2. Upload/Download** | Extender métricas a operaciones de archivo | Baja |
+| **3. Third-party Hooks** | Ejemplos para Firebase, DataDog, Sentry | Media |
+| **4. URLSessionTaskMetrics** | Delegate-based session para datos precisos (DNS, TLS timing) | Alta (opcional) |
+
+### Recomendaciones Adicionales
+
+- **No incluir Firebase/DataDog/Sentry como dependencias** en NetKit
+- Documentar cómo crear collectors custom y proveer ejemplos
+- Los usuarios implementan sus propios collectors con sus SDKs preferidos
+- Fase 4 (URLSessionTaskMetrics) queda como mejora futura opcional

@@ -1,5 +1,13 @@
 import Foundation
 
+/// The result of looking up or creating an in-flight request task.
+internal struct InFlightTaskResult: Sendable {
+    /// The task to await for the request result.
+    let task: Task<Data, Error>
+    /// Whether this task was newly created (true) or was already in-flight (false).
+    let wasCreated: Bool
+}
+
 /// Tracks in-flight network requests to enable deduplication.
 ///
 /// This actor maintains a thread-safe dictionary of currently executing requests,
@@ -18,14 +26,14 @@ internal actor InFlightRequestTracker {
     /// - Parameters:
     ///   - key: The request key to look up.
     ///   - createTask: A closure that creates a new task if no existing task is found.
-    /// - Returns: Either the existing in-flight task or the newly created task.
-    func getOrCreate(for key: RequestKey, createTask: () -> Task<Data, Error>) -> Task<Data, Error> {
+    /// - Returns: A result containing the task and whether it was newly created.
+    func getOrCreate(for key: RequestKey, createTask: () -> Task<Data, Error>) -> InFlightTaskResult {
         if let existing = inFlight[key] {
-            return existing
+            return InFlightTaskResult(task: existing, wasCreated: false)
         }
         let task: Task<Data, Error> = createTask()
         inFlight[key] = task
-        return task
+        return InFlightTaskResult(task: task, wasCreated: true)
     }
 
     /// Returns an existing task for the given request key, if one is in flight.
