@@ -8,7 +8,11 @@
       "Bash(git checkout -b task/002-network-error-context)",
       "Bash(xcodebuild -scheme NetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build)",
       "Bash(xcodebuild -scheme NetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build-for-testing)",
-      "Bash(xcodebuild -scheme NetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test)"
+      "Bash(xcodebuild -scheme NetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test)",
+      "Bash(git push -u origin task/002-network-error-context)",
+      "Bash(cd:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)"
     ]
   }
 }
