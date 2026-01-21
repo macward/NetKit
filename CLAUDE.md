@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Search & Analysis Exclusions
+
+When searching or analyzing code, **IGNORE** these directories unless explicitly requested:
+- `tasks/` - Task planning files (not source code)
+- `docs/` - Documentation files (not source code)
+
+Focus on `Sources/` and `Tests/` for code-related queries.
+
 ## Project Overview
 
 NetKit is a Swift networking library for iOS 18+ and macOS 15+, built with Swift 6 and no external dependencies. It provides a type-safe, protocol-oriented approach to API communication with built-in support for authentication, caching, retries, and long polling.
