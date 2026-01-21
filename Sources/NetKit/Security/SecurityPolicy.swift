@@ -20,7 +20,21 @@ public enum ValidationFailureAction: Sendable, Equatable {
     /// Reject the connection when pinning fails. This is the secure default.
     case reject
 
-    /// Allow the connection but log a warning. Use only for debugging.
+    /// Allow the connection but log a warning.
+    ///
+    /// - Warning: **DEBUG ONLY** - Never use this in production builds.
+    ///   This mode bypasses security and should only be used during development
+    ///   to diagnose pinning issues. Consider using `#if DEBUG` to prevent
+    ///   accidental use in release builds.
+    ///
+    /// Example safe usage:
+    /// ```swift
+    /// #if DEBUG
+    /// let policy = basePolicy.withFailureAction(.allowWithWarning)
+    /// #else
+    /// let policy = basePolicy
+    /// #endif
+    /// ```
     case allowWithWarning
 }
 
@@ -31,7 +45,7 @@ public enum ValidationFailureAction: Sendable, Equatable {
 /// Use this to create a security policy that validates server certificates against
 /// pinned public keys or certificates.
 ///
-/// ## Example
+/// ## Quick Start
 ///
 /// ```swift
 /// // Public key pinning (recommended)
@@ -52,11 +66,65 @@ public enum ValidationFailureAction: Sendable, Equatable {
 ///
 /// To extract the public key from a server certificate using OpenSSL:
 /// ```bash
-/// openssl s_client -connect api.example.com:443 | \
+/// # Get raw public key in DER format
+/// openssl s_client -connect api.example.com:443 2>/dev/null | \
+/// openssl x509 -pubkey -noout | \
+/// openssl pkey -pubin -outform der > publickey.der
+///
+/// # Or get base64-encoded SHA256 hash for verification
+/// openssl s_client -connect api.example.com:443 2>/dev/null | \
 /// openssl x509 -pubkey -noout | \
 /// openssl pkey -pubin -outform der | \
 /// openssl dgst -sha256 -binary | \
 /// openssl enc -base64
+/// ```
+///
+/// ## Extracting Full Certificates
+///
+/// To extract the full certificate in DER format (for certificate pinning):
+/// ```bash
+/// # Get certificate in DER format
+/// openssl s_client -connect api.example.com:443 2>/dev/null | \
+/// openssl x509 -outform der > certificate.der
+/// ```
+///
+/// ## Loading Pin Data in Swift
+///
+/// ```swift
+/// // From bundled file
+/// let certURL = Bundle.main.url(forResource: "certificate", withExtension: "der")!
+/// let certData = try Data(contentsOf: certURL)
+///
+/// // From base64 string (e.g., from config)
+/// let base64Pin = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+/// let pinData = Data(base64Encoded: base64Pin)!
+/// ```
+///
+/// ## Certificate Rotation Best Practices
+///
+/// When rotating certificates, follow this procedure to avoid service disruption:
+///
+/// 1. **Before rotation**: Add the new certificate's public key to `fallbackKeys`
+/// 2. **Deploy app update**: Release and allow time for user adoption
+/// 3. **Rotate server certificate**: Switch to the new certificate on the server
+/// 4. **After adoption**: Move new key to `publicKeys`, remove old key from both arrays
+/// 5. **Deploy final update**: Release with cleaned-up pin configuration
+///
+/// Example:
+/// ```swift
+/// // Phase 1: Prepare for rotation
+/// let policy = SecurityPolicy.publicKeyPinning(
+///     hosts: ["api.example.com"],
+///     publicKeys: [currentKeyData],
+///     fallbackKeys: [newKeyData]  // Add new key as fallback
+/// )
+///
+/// // Phase 2: After server rotation, clean up
+/// let policy = SecurityPolicy.publicKeyPinning(
+///     hosts: ["api.example.com"],
+///     publicKeys: [newKeyData],   // New key is now primary
+///     fallbackKeys: []            // Remove old key
+/// )
 /// ```
 public struct SecurityPolicy: Sendable, Equatable {
     /// The pinning mode to use.
@@ -83,7 +151,7 @@ public struct SecurityPolicy: Sendable, Equatable {
     /// - Parameters:
     ///   - mode: The pinning mode (public key or certificate).
     ///   - pinnedHosts: Hosts to apply pinning to. Empty means all hosts.
-    ///   - pinnedItems: The primary pinned items (keys or certificates).
+    ///   - pinnedItems: The primary pinned items (keys or certificates). Must not be empty.
     ///   - fallbackItems: Backup items for certificate rotation.
     ///   - failureAction: Action to take on validation failure.
     ///   - validateCertificateChain: Whether to validate the certificate chain first.
@@ -95,7 +163,10 @@ public struct SecurityPolicy: Sendable, Equatable {
         failureAction: ValidationFailureAction = .reject,
         validateCertificateChain: Bool = true
     ) {
-        precondition(!pinnedItems.isEmpty, "pinnedItems cannot be empty - at least one pinned key or certificate is required")
+        precondition(
+            !pinnedItems.isEmpty,
+            "SecurityPolicy: pinnedItems cannot be empty. At least one pinned key or certificate is required."
+        )
         self.mode = mode
         self.pinnedHosts = pinnedHosts
         self.pinnedItems = pinnedItems
@@ -161,6 +232,10 @@ public struct SecurityPolicy: Sendable, Equatable {
     // MARK: - Modifiers
 
     /// Returns a copy of this policy with a different failure action.
+    ///
+    /// - Warning: Using `.allowWithWarning` bypasses security.
+    ///   Only use for debugging in non-production builds.
+    ///
     /// - Parameter action: The new failure action.
     /// - Returns: A modified security policy.
     public func withFailureAction(_ action: ValidationFailureAction) -> SecurityPolicy {

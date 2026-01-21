@@ -55,6 +55,14 @@ let client = NetworkClient(environment: env, session: session)
 ```
 
 ## Notes
-- All 278 tests pass
+- All 282 tests pass
 - Build succeeds with no warnings
-- Code review identified and fixed delegate lifecycle issue
+- Code review identified and fixed:
+  - Delegate lifecycle management (now uses associated objects)
+  - `@unchecked Sendable` documentation
+  - Public key extraction error handling
+  - Long line SwiftLint violations
+  - Exposed `validatedHosts` for debugging
+  - Added `PinningSessionFactory.delegate(for:)` for delegate retrieval
+  - Marked `.allowWithWarning` as DEBUG ONLY
+  - Comprehensive documentation in `docs/certificate-pinning.md`

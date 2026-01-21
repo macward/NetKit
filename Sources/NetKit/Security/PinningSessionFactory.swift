@@ -3,6 +3,8 @@ import ObjectiveC
 
 // MARK: - Associated Object Key
 
+// Associated object key - only its memory address is used as an identifier.
+// The value itself is never read or written concurrently, making this safe.
 private nonisolated(unsafe) var delegateKey: UInt8 = 0
 
 // MARK: - Pinning Session Factory
@@ -34,9 +36,18 @@ private nonisolated(unsafe) var delegateKey: UInt8 = 0
 ///
 /// ## Delegate Lifecycle
 ///
-/// The factory automatically manages the delegate's lifecycle by storing it as
-/// an associated object on the URLSession. This ensures the delegate remains
-/// alive for the duration of the session.
+/// The factory manages the delegate's lifecycle by storing it as an associated
+/// object on the URLSession. This ensures the delegate remains alive for the
+/// session's duration. When you're done with the session, call
+/// `session.finishTasksAndInvalidate()` or `session.invalidateAndCancel()`
+/// to properly clean up resources.
+///
+/// ## Important
+///
+/// Always invalidate sessions when done to prevent memory leaks:
+/// ```swift
+/// defer { session.finishTasksAndInvalidate() }
+/// ```
 public enum PinningSessionFactory {
     /// Creates a URLSession configured with certificate pinning.
     ///
@@ -57,9 +68,15 @@ public enum PinningSessionFactory {
             delegate: delegate,
             delegateQueue: nil
         )
-        // Keep delegate alive by storing it as an associated object on the session.
-        // URLSession holds a weak reference to its delegate, so we need to retain it.
-        objc_setAssociatedObject(session, &delegateKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        // Store delegate as associated object to ensure it stays alive.
+        // URLSession retains its delegate, but we also store it here to make
+        // the ownership explicit and allow retrieval if needed.
+        objc_setAssociatedObject(
+            session,
+            &delegateKey,
+            delegate,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
         return session
     }
 
@@ -81,8 +98,21 @@ public enum PinningSessionFactory {
             delegate: delegate,
             delegateQueue: delegateQueue
         )
-        // Keep delegate alive by storing it as an associated object on the session.
-        objc_setAssociatedObject(session, &delegateKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        // Store delegate as associated object to ensure it stays alive.
+        objc_setAssociatedObject(
+            session,
+            &delegateKey,
+            delegate,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
         return session
+    }
+
+    /// Retrieves the pinning delegate from a session created by this factory.
+    ///
+    /// - Parameter session: A URLSession created by `createSession(policy:)`.
+    /// - Returns: The `CertificatePinningDelegate` if found, nil otherwise.
+    public static func delegate(for session: URLSession) -> CertificatePinningDelegate? {
+        objc_getAssociatedObject(session, &delegateKey) as? CertificatePinningDelegate
     }
 }

@@ -247,6 +247,30 @@ struct CertificatePinningDelegateTests {
         // Verify delegate is a valid URLSessionDelegate
         #expect(delegate is URLSessionDelegate)
     }
+
+    @Test("Delegate starts with empty validated hosts")
+    func delegateStartsWithEmptyValidatedHosts() {
+        let keyData: Data = Data([0x01, 0x02, 0x03])
+        let policy: SecurityPolicy = SecurityPolicy.publicKeyPinning(
+            publicKeys: [keyData]
+        )
+
+        let delegate: CertificatePinningDelegate = CertificatePinningDelegate(policy: policy)
+
+        #expect(delegate.validatedHosts.isEmpty)
+    }
+
+    @Test("isHostValidated returns false for unvalidated host")
+    func isHostValidatedReturnsFalseForUnvalidatedHost() {
+        let keyData: Data = Data([0x01, 0x02, 0x03])
+        let policy: SecurityPolicy = SecurityPolicy.publicKeyPinning(
+            publicKeys: [keyData]
+        )
+
+        let delegate: CertificatePinningDelegate = CertificatePinningDelegate(policy: policy)
+
+        #expect(delegate.isHostValidated("api.example.com") == false)
+    }
 }
 
 // MARK: - PinningSessionFactory Tests
@@ -298,5 +322,26 @@ struct PinningSessionFactoryTests {
 
         #expect(session.delegate != nil)
         #expect(session.delegateQueue.name == "TestQueue")
+    }
+
+    @Test("Factory can retrieve delegate from session")
+    func factoryCanRetrieveDelegate() {
+        let keyData: Data = Data([0x01, 0x02, 0x03])
+        let policy: SecurityPolicy = SecurityPolicy.publicKeyPinning(
+            publicKeys: [keyData]
+        )
+
+        let session: URLSession = PinningSessionFactory.createSession(policy: policy)
+        let delegate: CertificatePinningDelegate? = PinningSessionFactory.delegate(for: session)
+
+        #expect(delegate != nil)
+    }
+
+    @Test("Factory returns nil for session not created by factory")
+    func factoryReturnsNilForUnknownSession() {
+        let session: URLSession = URLSession(configuration: .default)
+        let delegate: CertificatePinningDelegate? = PinningSessionFactory.delegate(for: session)
+
+        #expect(delegate == nil)
     }
 }

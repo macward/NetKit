@@ -27,7 +27,12 @@ import os
 ///
 /// ## Thread Safety
 ///
-/// This delegate is thread-safe and can be used with concurrent requests.
+/// This class is thread-safe. The `@unchecked Sendable` conformance is used because:
+/// - `policy` and `logger` are immutable after initialization
+/// - `state` is protected by `OSAllocatedUnfairLock` for synchronized access
+/// - `NSObject` base class doesn't conform to `Sendable`, requiring the unchecked annotation
+///
+/// All mutable state is accessed through the lock, ensuring safe concurrent use.
 public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let policy: SecurityPolicy
     private let state: OSAllocatedUnfairLock<DelegateState>
@@ -48,6 +53,22 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
         self.state = OSAllocatedUnfairLock(initialState: DelegateState())
         self.logger = Logger(subsystem: "NetKit", category: "CertificatePinning")
         super.init()
+    }
+
+    // MARK: - Public API
+
+    /// Returns the set of hosts that have been successfully validated in this session.
+    ///
+    /// Useful for debugging and monitoring certificate pinning behavior.
+    public var validatedHosts: Set<String> {
+        state.withLock { $0.validatedHosts }
+    }
+
+    /// Checks if a host has already been validated in this session.
+    /// - Parameter host: The host to check.
+    /// - Returns: `true` if the host was previously validated successfully.
+    public func isHostValidated(_ host: String) -> Bool {
+        state.withLock { $0.validatedHosts.contains(host) }
     }
 
     // MARK: - URLSessionDelegate
@@ -93,7 +114,10 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
         }
 
         // Perform pinning validation
-        let validationResult: PinningValidationResult = validatePinning(serverTrust: serverTrust, host: host)
+        let validationResult: PinningValidationResult = validatePinning(
+            serverTrust: serverTrust,
+            host: host
+        )
 
         switch validationResult {
         case .success:
@@ -113,7 +137,10 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
         case failure(SecurityError)
     }
 
-    private func validatePinning(serverTrust: SecTrust, host: String) -> PinningValidationResult {
+    private func validatePinning(
+        serverTrust: SecTrust,
+        host: String
+    ) -> PinningValidationResult {
         guard let certificateChain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
               !certificateChain.isEmpty else {
             logger.warning("No certificates found in server trust for \(host)")
@@ -121,6 +148,7 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
         }
 
         let allPinnedItems: [Data] = policy.allPinnedItems
+        var extractionFailureCount: Int = 0
 
         for certificate in certificateChain {
             let itemToCompare: Data?
@@ -129,6 +157,7 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
             case .publicKey:
                 itemToCompare = extractPublicKey(from: certificate)
                 if itemToCompare == nil {
+                    extractionFailureCount += 1
                     logger.warning("Failed to extract public key from certificate for \(host)")
                 }
 
@@ -148,7 +177,17 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
                     logger.info("Certificate pinning succeeded for \(host) (fallback pin)")
                 }
                 return .success
+            } else {
+                logger.debug(
+                    "No match for certificate from \(host). Checked \(allPinnedItems.count) pinned items"
+                )
             }
+        }
+
+        // If all public key extractions failed, return specific error
+        if policy.mode == .publicKey && extractionFailureCount == certificateChain.count {
+            logger.error("All public key extractions failed for \(host)")
+            return .failure(.publicKeyExtractionFailed(host: host))
         }
 
         logger.warning("Certificate pinning failed for \(host) - no matching pins found")
@@ -177,11 +216,18 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
     ) {
         switch policy.failureAction {
         case .reject:
-            logger.error("Certificate pinning rejected connection to \(host): \(error.localizedDescription)")
+            logger.error(
+                "Certificate pinning rejected connection to \(host): \(error.localizedDescription)"
+            )
             completionHandler(.cancelAuthenticationChallenge, nil)
 
         case .allowWithWarning:
-            logger.warning("Certificate pinning failed for \(host) but allowing connection (debug mode): \(error.localizedDescription)")
+            logger.warning(
+                """
+                Certificate pinning failed for \(host) but allowing connection \
+                (DEBUG MODE - not for production): \(error.localizedDescription)
+                """
+            )
             completionHandler(.performDefaultHandling, nil)
         }
     }

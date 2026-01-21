@@ -12,6 +12,7 @@ A simple, secure, and reusable networking layer for Swift.
 - Response caching with HTTP header support
 - Request deduplication for concurrent identical requests
 - Request/response interceptors (auth, logging)
+- **SSL/TLS Certificate Pinning** for MITM protection
 - Sensitive data sanitization in logs
 - Full async/await support with Swift 6 concurrency
 
@@ -32,6 +33,7 @@ A simple, secure, and reusable networking layer for Swift.
 | [Logging](logging.md) | Logging, Sensitive Data Sanitization |
 | [Long Polling](long-polling.md) | Real-time Updates with Long Polling |
 | [Transfers](transfers.md) | Upload & Download with Progress |
+| [Certificate Pinning](certificate-pinning.md) | SSL/TLS Security, MITM Protection |
 | [Testing](testing.md) | MockNetworkClient, Dependency Injection |
 | [Configuration](configuration.md) | Environments, JSON Encoding/Decoding |
 | [Examples](examples.md) | Full Example, Error Handling Patterns |
