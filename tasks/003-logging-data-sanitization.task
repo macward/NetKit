@@ -1,30 +1,71 @@
 # Task: Sensitive Data Sanitization in Logs
 
-Status: pending
+Status: done
 
 ## Objective
 Implementar sanitización de datos sensibles en LoggingInterceptor para prevenir exposición accidental de tokens, passwords y API keys.
 
 ## Context
-- Related files: Sources/NetKit/Interceptors/LoggingInterceptor.swift
+- Related files:
+  - Sources/NetKit/Interceptors/LoggingInterceptor.swift
+  - Sources/NetKit/Models/NetworkError.swift (contiene sanitizeHeaders existente)
 - Dependencies: none
+- Código existente a reutilizar:
+  - `sensitiveHeaders` set en NetworkError.swift (líneas 6-15)
+  - `sanitizeHeaders(_:)` función en NetworkError.swift (líneas 20-32)
 
 ## Steps
-1. [ ] Crear protocolo SensitiveDataSanitizer
-2. [ ] Implementar lista configurable de headers sensibles (Authorization, X-API-Key, Cookie, etc.)
-3. [ ] Implementar redacción de valores sensibles en headers ([REDACTED])
-4. [ ] Agregar sanitización de query parameters sensibles (token, api_key, password)
-5. [ ] Agregar sanitización de body para campos sensibles
-6. [ ] Hacer la configuración de sanitización inyectable en LoggingInterceptor
-7. [ ] Agregar opción para deshabilitar logging en producción
+1. [x] Extraer lógica de sanitización a módulo compartido
+   - Mover `sensitiveHeaders` y `sanitizeHeaders` de NetworkError.swift a nuevo archivo
+   - Crear Sources/NetKit/Core/SanitizationConfig.swift
+   - Mantener compatibilidad con RequestSnapshot/ResponseSnapshot
+
+2. [x] Crear struct SanitizationConfig configurable
+   - sensitiveHeaders: Set<String> (default: authorization, x-api-key, cookie, etc.)
+   - sensitiveQueryParams: Set<String> (default: token, api_key, password, secret)
+   - sensitiveBodyFields: Set<String> (default: password, secret, token, api_key)
+   - redactionString: String (default: "[REDACTED]")
+   - Proveer .default y .none presets
+
+3. [x] Implementar sanitización de query parameters en URLs
+   - Parsear query params de URL
+   - Redactar valores de params sensibles
+   - Reconstruir URL para logging
+
+4. [x] Implementar sanitización de body (opcional, solo JSON)
+   - Solo aplicar si Content-Type es application/json
+   - Parsear JSON, redactar campos sensibles en primer nivel
+   - Limitar a bodies < 10KB por performance
+   - Si no es JSON o es muy grande, truncar sin parsear
+
+5. [x] Integrar SanitizationConfig en LoggingInterceptor
+   - Agregar parámetro `sanitization: SanitizationConfig = .default` en init
+   - Aplicar sanitización en logRequest() y logResponse()
+   - Sanitizar headers, URL query params, y body
+
+6. [x] Agregar tests de sanitización
+   - Test: headers sensibles redactados
+   - Test: query params sensibles redactados
+   - Test: body fields sensibles redactados
+   - Test: configuración custom funciona
+   - Test: .none config no redacta nada
 
 ## Acceptance Criteria
-- [ ] Authorization header nunca se loggea en claro
-- [ ] API keys en query params están redactadas
-- [ ] Passwords en body están redactadas
-- [ ] Lista de campos sensibles es configurable
-- [ ] Tests verifican que datos sensibles no aparecen en logs
+- [x] Authorization header nunca se loggea en claro
+- [x] API keys en query params están redactadas
+- [x] Passwords en body JSON están redactadas
+- [x] Lista de campos sensibles es configurable via SanitizationConfig
+- [x] Tests verifican que datos sensibles no aparecen en logs
+- [x] RequestSnapshot/ResponseSnapshot siguen funcionando (no breaking change)
+- [x] Performance: sanitización de body solo en JSON < 10KB
 
 ## Notes
-- Default debe ser seguro (sanitizar por defecto)
-- Considerar niveles de logging (verbose solo en debug)
+- Default debe ser seguro (sanitizar por defecto con .default)
+- LogLevel.none ya deshabilita logging completamente
+- Body sanitization es costosa, limitar scope a JSON pequeños
+- Mantener backward compatibility con API existente de LoggingInterceptor
+
+## Technical Decisions
+- Struct SanitizationConfig en vez de protocolo (más simple, suficiente flexibilidad)
+- Reutilizar lógica existente de NetworkError.swift
+- Body sanitization opcional y limitada por performance

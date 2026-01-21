@@ -346,7 +346,7 @@ await cache.invalidateAll()
 
 ## Logging
 
-Log requests and responses:
+Log requests and responses with automatic sensitive data sanitization:
 
 ```swift
 let loggingInterceptor = LoggingInterceptor(level: .verbose)
@@ -356,6 +356,40 @@ let client = NetworkClient(
     environment: APIEnvironment(),
     interceptors: [loggingInterceptor]
 )
+```
+
+### Sensitive Data Sanitization
+
+By default, `LoggingInterceptor` automatically redacts sensitive data:
+
+- **Headers**: Authorization, X-API-Key, Cookie, etc.
+- **Query Parameters**: token, api_key, password, secret, etc.
+- **JSON Body Fields**: password, secret, token, credentials, etc.
+
+```swift
+// Default sanitization (recommended for production)
+let interceptor = LoggingInterceptor(level: .verbose)
+
+// Custom sanitization rules
+let customConfig = SanitizationConfig(
+    sensitiveHeaders: ["X-Custom-Auth", "X-Secret"],
+    sensitiveQueryParams: ["custom_token"],
+    sensitiveBodyFields: ["customPassword", "apiSecret"]
+)
+let interceptor = LoggingInterceptor(level: .verbose, sanitization: customConfig)
+
+// Disable sanitization (debugging only - NOT for production)
+let interceptor = LoggingInterceptor(level: .verbose, sanitization: .none)
+
+// Strict mode with additional fields (PCI compliance)
+let interceptor = LoggingInterceptor(level: .verbose, sanitization: .strict)
+```
+
+Example log output with sanitization:
+```
+➡️ POST https://api.example.com/login?token=[REDACTED]
+   Headers: ["Authorization": "[REDACTED]", "Content-Type": "application/json"]
+   Body: {"username":"john","password":"[REDACTED]"}
 ```
 
 ## Custom Interceptors
