@@ -1,36 +1,5 @@
 import Foundation
 
-// MARK: - Header Sanitization
-
-/// Headers that contain sensitive information and should be redacted in snapshots.
-private let sensitiveHeaders: Set<String> = [
-    "authorization",
-    "x-api-key",
-    "api-key",
-    "x-auth-token",
-    "cookie",
-    "set-cookie",
-    "x-csrf-token",
-    "x-xsrf-token"
-]
-
-/// Sanitizes headers by redacting sensitive values.
-/// - Parameter headers: The original headers dictionary.
-/// - Returns: Headers with sensitive values replaced by "[REDACTED]".
-private func sanitizeHeaders(_ headers: [String: String]?) -> [String: String] {
-    guard let headers else { return [:] }
-
-    var sanitized: [String: String] = [:]
-    for (key, value) in headers {
-        if sensitiveHeaders.contains(key.lowercased()) {
-            sanitized[key] = "[REDACTED]"
-        } else {
-            sanitized[key] = value
-        }
-    }
-    return sanitized
-}
-
 // MARK: - Request Snapshot
 
 /// A snapshot of the request that was made when an error occurred.
@@ -52,7 +21,7 @@ public struct RequestSnapshot: Sendable, Equatable {
     public init(request: URLRequest) {
         self.url = request.url
         self.method = request.httpMethod
-        self.headers = sanitizeHeaders(request.allHTTPHeaderFields)
+        self.headers = sanitizeHeadersWithDefaultConfig(request.allHTTPHeaderFields)
         self.bodySize = request.httpBody?.count
     }
 
@@ -65,7 +34,7 @@ public struct RequestSnapshot: Sendable, Equatable {
     ) {
         self.url = url
         self.method = method
-        self.headers = sanitizeHeaders(headers)
+        self.headers = sanitizeHeadersWithDefaultConfig(headers)
         self.bodySize = bodySize
     }
 }
@@ -118,7 +87,7 @@ public struct ResponseSnapshot: Sendable, Equatable {
                 headerDict[keyString] = valueString
             }
         }
-        self.headers = sanitizeHeaders(headerDict)
+        self.headers = sanitizeHeadersWithDefaultConfig(headerDict)
 
         self.bodySize = data?.count
 
@@ -133,7 +102,7 @@ public struct ResponseSnapshot: Sendable, Equatable {
         bodySize: Int? = nil
     ) {
         self.statusCode = statusCode
-        self.headers = sanitizeHeaders(headers)
+        self.headers = sanitizeHeadersWithDefaultConfig(headers)
         self.bodyPreview = bodyPreview
         self.bodySize = bodySize
     }

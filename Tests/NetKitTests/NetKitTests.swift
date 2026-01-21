@@ -1569,3 +1569,489 @@ struct CacheControlDirectiveTests {
         #expect(decoded == directive)
     }
 }
+
+// MARK: - SanitizationConfig Tests
+
+@Suite("SanitizationConfig Tests")
+struct SanitizationConfigTests {
+    @Test("Default configuration has expected sensitive headers")
+    func defaultSensitiveHeaders() {
+        let config: SanitizationConfig = .default
+
+        #expect(config.sensitiveHeaders.contains("authorization"))
+        #expect(config.sensitiveHeaders.contains("x-api-key"))
+        #expect(config.sensitiveHeaders.contains("cookie"))
+    }
+
+    @Test("Default configuration has expected sensitive query params")
+    func defaultSensitiveQueryParams() {
+        let config: SanitizationConfig = .default
+
+        #expect(config.sensitiveQueryParams.contains("token"))
+        #expect(config.sensitiveQueryParams.contains("api_key"))
+        #expect(config.sensitiveQueryParams.contains("password"))
+    }
+
+    @Test("Default configuration has expected sensitive body fields")
+    func defaultSensitiveBodyFields() {
+        let config: SanitizationConfig = .default
+
+        #expect(config.sensitiveBodyFields.contains("password"))
+        #expect(config.sensitiveBodyFields.contains("secret"))
+        #expect(config.sensitiveBodyFields.contains("token"))
+    }
+
+    @Test("None configuration disables all sanitization")
+    func noneConfigDisablesSanitization() {
+        let config: SanitizationConfig = .none
+
+        #expect(config.sensitiveHeaders.isEmpty)
+        #expect(config.sensitiveQueryParams.isEmpty)
+        #expect(config.sensitiveBodyFields.isEmpty)
+    }
+
+    @Test("Strict configuration has additional sensitive fields")
+    func strictConfigHasAdditionalFields() {
+        let config: SanitizationConfig = .strict
+
+        #expect(config.sensitiveBodyFields.contains("creditCard"))
+        #expect(config.sensitiveBodyFields.contains("ssn"))
+        #expect(config.sensitiveQueryParams.contains("signature"))
+    }
+
+    @Test("Custom configuration can be created")
+    func customConfiguration() {
+        let config: SanitizationConfig = SanitizationConfig(
+            sensitiveHeaders: ["x-custom-auth"],
+            sensitiveQueryParams: ["custom_token"],
+            sensitiveBodyFields: ["customSecret"],
+            redactionString: "***"
+        )
+
+        #expect(config.sensitiveHeaders.contains("x-custom-auth"))
+        #expect(config.sensitiveQueryParams.contains("custom_token"))
+        #expect(config.sensitiveBodyFields.contains("customSecret"))
+        #expect(config.redactionString == "***")
+    }
+}
+
+// MARK: - Header Sanitization Tests
+
+@Suite("Header Sanitization Tests")
+struct HeaderSanitizationTests {
+    @Test("Authorization header is redacted")
+    func authorizationHeaderRedacted() {
+        let config: SanitizationConfig = .default
+        let headers: [String: String] = [
+            "Authorization": "Bearer secret-token-12345",
+            "Content-Type": "application/json"
+        ]
+
+        let sanitized: [String: String] = config.sanitizeHeaders(headers)
+
+        #expect(sanitized["Authorization"] == "[REDACTED]")
+        #expect(sanitized["Content-Type"] == "application/json")
+    }
+
+    @Test("X-API-Key header is redacted")
+    func apiKeyHeaderRedacted() {
+        let config: SanitizationConfig = .default
+        let headers: [String: String] = [
+            "X-API-Key": "my-secret-api-key",
+            "Accept": "application/json"
+        ]
+
+        let sanitized: [String: String] = config.sanitizeHeaders(headers)
+
+        #expect(sanitized["X-API-Key"] == "[REDACTED]")
+        #expect(sanitized["Accept"] == "application/json")
+    }
+
+    @Test("Cookie header is redacted")
+    func cookieHeaderRedacted() {
+        let config: SanitizationConfig = .default
+        let headers: [String: String] = [
+            "Cookie": "session=abc123; token=secret"
+        ]
+
+        let sanitized: [String: String] = config.sanitizeHeaders(headers)
+
+        #expect(sanitized["Cookie"] == "[REDACTED]")
+    }
+
+    @Test("Case insensitive header matching")
+    func caseInsensitiveHeaderMatching() {
+        let config: SanitizationConfig = .default
+        let headers: [String: String] = [
+            "AUTHORIZATION": "Bearer token",
+            "authorization": "Bearer token2"
+        ]
+
+        let sanitized: [String: String] = config.sanitizeHeaders(headers)
+
+        #expect(sanitized["AUTHORIZATION"] == "[REDACTED]")
+        #expect(sanitized["authorization"] == "[REDACTED]")
+    }
+
+    @Test("None config does not redact headers")
+    func noneConfigNoRedaction() {
+        let config: SanitizationConfig = .none
+        let headers: [String: String] = [
+            "Authorization": "Bearer secret-token"
+        ]
+
+        let sanitized: [String: String] = config.sanitizeHeaders(headers)
+
+        #expect(sanitized["Authorization"] == "Bearer secret-token")
+    }
+
+    @Test("Nil headers returns empty dictionary")
+    func nilHeadersReturnsEmpty() {
+        let config: SanitizationConfig = .default
+        let sanitized: [String: String] = config.sanitizeHeaders(nil)
+
+        #expect(sanitized.isEmpty)
+    }
+}
+
+// MARK: - URL Sanitization Tests
+
+@Suite("URL Sanitization Tests")
+struct URLSanitizationTests {
+    @Test("Token query param is redacted")
+    func tokenQueryParamRedacted() {
+        let config: SanitizationConfig = .default
+        let url: URL = URL(string: "https://api.example.com/data?token=secret123&page=1")!
+
+        let sanitized: String = config.sanitizeURL(url)
+
+        #expect(sanitized.contains("token="))
+        #expect(sanitized.contains("page=1"))
+        #expect(!sanitized.contains("secret123"))
+    }
+
+    @Test("API key query param is redacted")
+    func apiKeyQueryParamRedacted() {
+        let config: SanitizationConfig = .default
+        let url: URL = URL(string: "https://api.example.com/search?api_key=mykey&q=test")!
+
+        let sanitized: String = config.sanitizeURL(url)
+
+        #expect(sanitized.contains("api_key="))
+        #expect(sanitized.contains("q=test"))
+        #expect(!sanitized.contains("mykey"))
+    }
+
+    @Test("Password query param is redacted")
+    func passwordQueryParamRedacted() {
+        let config: SanitizationConfig = .default
+        let url: URL = URL(string: "https://api.example.com/login?user=john&password=secret")!
+
+        let sanitized: String = config.sanitizeURL(url)
+
+        #expect(sanitized.contains("password="))
+        #expect(sanitized.contains("user=john"))
+        #expect(!sanitized.contains("=secret"))
+    }
+
+    @Test("Multiple sensitive params are redacted")
+    func multipleSensitiveParamsRedacted() {
+        let config: SanitizationConfig = .default
+        let url: URL = URL(string: "https://api.example.com/auth?token=t1&api_key=k1&access_token=a1")!
+
+        let sanitized: String = config.sanitizeURL(url)
+
+        #expect(!sanitized.contains("=t1"))
+        #expect(!sanitized.contains("=k1"))
+        #expect(!sanitized.contains("=a1"))
+        #expect(sanitized.contains("token="))
+        #expect(sanitized.contains("api_key="))
+        #expect(sanitized.contains("access_token="))
+    }
+
+    @Test("URL without query params unchanged")
+    func urlWithoutQueryParamsUnchanged() {
+        let config: SanitizationConfig = .default
+        let url: URL = URL(string: "https://api.example.com/users/123")!
+
+        let sanitized: String = config.sanitizeURL(url)
+
+        #expect(sanitized == "https://api.example.com/users/123")
+    }
+
+    @Test("None config does not redact query params")
+    func noneConfigNoQueryParamRedaction() {
+        let config: SanitizationConfig = .none
+        let url: URL = URL(string: "https://api.example.com/data?token=secret")!
+
+        let sanitized: String = config.sanitizeURL(url)
+
+        #expect(sanitized.contains("token=secret"))
+    }
+
+    @Test("Nil URL returns 'nil' string")
+    func nilURLReturnsNilString() {
+        let config: SanitizationConfig = .default
+
+        let sanitized: String = config.sanitizeURL(nil)
+
+        #expect(sanitized == "nil")
+    }
+
+    @Test("Case insensitive query param matching")
+    func caseInsensitiveQueryParamMatching() {
+        let config: SanitizationConfig = .default
+        let url: URL = URL(string: "https://api.example.com/data?TOKEN=secret&Token=secret2")!
+
+        let sanitized: String = config.sanitizeURL(url)
+
+        #expect(!sanitized.contains("=secret"))
+    }
+}
+
+// MARK: - Body Sanitization Tests
+
+@Suite("Body Sanitization Tests")
+struct BodySanitizationTests {
+    @Test("Password field in JSON body is redacted")
+    func passwordFieldRedacted() {
+        let config: SanitizationConfig = .default
+        let json: [String: Any] = ["username": "john", "password": "secret123"]
+        let data: Data = try! JSONSerialization.data(withJSONObject: json)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json")
+
+        #expect(sanitized != nil)
+        #expect(sanitized!.contains("\"password\":\"[REDACTED]\""))
+        #expect(sanitized!.contains("\"username\":\"john\""))
+        #expect(!sanitized!.contains("secret123"))
+    }
+
+    @Test("Token field in JSON body is redacted")
+    func tokenFieldRedacted() {
+        let config: SanitizationConfig = .default
+        let json: [String: Any] = ["token": "abc123", "data": "value"]
+        let data: Data = try! JSONSerialization.data(withJSONObject: json)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json")
+
+        #expect(sanitized != nil)
+        #expect(sanitized!.contains("\"token\":\"[REDACTED]\""))
+        #expect(!sanitized!.contains("abc123"))
+    }
+
+    @Test("Multiple sensitive fields are redacted")
+    func multipleSensitiveFieldsRedacted() {
+        let config: SanitizationConfig = .default
+        let json: [String: Any] = [
+            "password": "pass1",
+            "secret": "sec1",
+            "api_key": "key1",
+            "name": "John"
+        ]
+        let data: Data = try! JSONSerialization.data(withJSONObject: json)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json")
+
+        #expect(sanitized != nil)
+        #expect(sanitized!.contains("\"password\":\"[REDACTED]\""))
+        #expect(sanitized!.contains("\"secret\":\"[REDACTED]\""))
+        #expect(sanitized!.contains("\"api_key\":\"[REDACTED]\""))
+        #expect(sanitized!.contains("\"name\":\"John\""))
+    }
+
+    @Test("Non-JSON body is not parsed")
+    func nonJSONBodyNotParsed() {
+        let config: SanitizationConfig = .default
+        let text: String = "password=secret&user=john"
+        let data: Data = text.data(using: .utf8)!
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "text/plain")
+
+        #expect(sanitized == text)
+    }
+
+    @Test("None config does not redact body fields")
+    func noneConfigNoBodyRedaction() {
+        let config: SanitizationConfig = .none
+        let json: [String: Any] = ["password": "secret"]
+        let data: Data = try! JSONSerialization.data(withJSONObject: json)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json")
+
+        #expect(sanitized != nil)
+        #expect(sanitized!.contains("secret"))
+    }
+
+    @Test("Large body is truncated without parsing")
+    func largeBodyTruncated() {
+        var config: SanitizationConfig = .default
+        config.maxBodySizeForSanitization = 100
+        let largeJson: [String: Any] = ["password": "secret", "data": String(repeating: "x", count: 200)]
+        let data: Data = try! JSONSerialization.data(withJSONObject: largeJson)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json", maxLength: 50)
+
+        #expect(sanitized != nil)
+        #expect(sanitized!.count <= 53)
+        #expect(sanitized!.hasSuffix("..."))
+    }
+
+    @Test("Nil body returns nil")
+    func nilBodyReturnsNil() {
+        let config: SanitizationConfig = .default
+
+        let sanitized: String? = config.sanitizeBody(nil, contentType: "application/json")
+
+        #expect(sanitized == nil)
+    }
+
+    @Test("Empty body returns nil")
+    func emptyBodyReturnsNil() {
+        let config: SanitizationConfig = .default
+
+        let sanitized: String? = config.sanitizeBody(Data(), contentType: "application/json")
+
+        #expect(sanitized == nil)
+    }
+
+    @Test("Nested JSON objects are sanitized recursively")
+    func nestedJSONObjectsSanitized() {
+        let config: SanitizationConfig = .default
+        let json: [String: Any] = [
+            "user": [
+                "name": "John",
+                "password": "secret123",
+                "credentials": [
+                    "api_key": "key123",
+                    "token": "token456"
+                ]
+            ],
+            "data": "value"
+        ]
+        let data: Data = try! JSONSerialization.data(withJSONObject: json)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json")
+
+        #expect(sanitized != nil)
+        #expect(!sanitized!.contains("secret123"))
+        #expect(!sanitized!.contains("key123"))
+        #expect(!sanitized!.contains("token456"))
+        #expect(sanitized!.contains("\"name\":\"John\""))
+        #expect(sanitized!.contains("\"data\":\"value\""))
+    }
+
+    @Test("JSON arrays with sensitive fields are sanitized")
+    func jsonArraysSanitized() {
+        let config: SanitizationConfig = .default
+        let json: [[String: Any]] = [
+            ["username": "john", "password": "pass1"],
+            ["username": "jane", "password": "pass2"]
+        ]
+        let data: Data = try! JSONSerialization.data(withJSONObject: json)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json")
+
+        #expect(sanitized != nil)
+        #expect(!sanitized!.contains("pass1"))
+        #expect(!sanitized!.contains("pass2"))
+        #expect(sanitized!.contains("\"username\":\"john\""))
+        #expect(sanitized!.contains("\"username\":\"jane\""))
+    }
+
+    @Test("Deeply nested arrays and objects are sanitized")
+    func deeplyNestedStructuresSanitized() {
+        let config: SanitizationConfig = .default
+        let json: [String: Any] = [
+            "items": [
+                ["nested": ["deep": ["secret": "hidden"]]],
+                ["token": "exposed"]
+            ]
+        ]
+        let data: Data = try! JSONSerialization.data(withJSONObject: json)
+
+        let sanitized: String? = config.sanitizeBody(data, contentType: "application/json")
+
+        #expect(sanitized != nil)
+        #expect(!sanitized!.contains("hidden"))
+        #expect(!sanitized!.contains("exposed"))
+    }
+}
+
+// MARK: - LoggingInterceptor Sanitization Tests
+
+@Suite("LoggingInterceptor Sanitization Tests")
+struct LoggingInterceptorSanitizationTests {
+    @Test("Interceptor with default sanitization config")
+    func interceptorWithDefaultConfig() async throws {
+        let interceptor: LoggingInterceptor = LoggingInterceptor(level: .verbose)
+        var request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/test?token=secret")!)
+        request.addValue("Bearer token123", forHTTPHeaderField: "Authorization")
+
+        let result: URLRequest = try await interceptor.intercept(request: request)
+
+        #expect(result.url == request.url)
+    }
+
+    @Test("Interceptor with none sanitization config")
+    func interceptorWithNoneConfig() async throws {
+        let interceptor: LoggingInterceptor = LoggingInterceptor(
+            level: .verbose,
+            sanitization: .none
+        )
+        var request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/test")!)
+        request.addValue("Bearer token123", forHTTPHeaderField: "Authorization")
+
+        let result: URLRequest = try await interceptor.intercept(request: request)
+
+        #expect(result.url == request.url)
+    }
+
+    @Test("Interceptor with custom sanitization config")
+    func interceptorWithCustomConfig() async throws {
+        let customConfig: SanitizationConfig = SanitizationConfig(
+            sensitiveHeaders: ["x-custom-secret"],
+            sensitiveQueryParams: ["custom_token"],
+            sensitiveBodyFields: ["customPassword"]
+        )
+        let interceptor: LoggingInterceptor = LoggingInterceptor(
+            level: .verbose,
+            sanitization: customConfig
+        )
+        let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/test")!)
+
+        let result: URLRequest = try await interceptor.intercept(request: request)
+
+        #expect(result.url == request.url)
+    }
+
+    @Test("Interceptor does not modify request")
+    func interceptorPassthrough() async throws {
+        let interceptor: LoggingInterceptor = LoggingInterceptor(level: .verbose)
+        var request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/test")!)
+        request.addValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        request.httpBody = "{\"password\":\"secret\"}".data(using: .utf8)
+
+        let result: URLRequest = try await interceptor.intercept(request: request)
+
+        #expect(result.url == request.url)
+        #expect(result.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+        #expect(result.httpBody == request.httpBody)
+    }
+
+    @Test("Interceptor does not modify response data")
+    func interceptorResponsePassthrough() async throws {
+        let interceptor: LoggingInterceptor = LoggingInterceptor(level: .verbose)
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://api.example.com/test")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Set-Cookie": "session=secret"]
+        )!
+        let data: Data = "{\"token\":\"secret\"}".data(using: .utf8)!
+
+        let result: Data = try await interceptor.intercept(response: response, data: data)
+
+        #expect(result == data)
+    }
+}
