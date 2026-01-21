@@ -16,6 +16,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let requestTracker: InFlightRequestTracker = InFlightRequestTracker()
+    private let metricsCollector: (any MetricsCollector)?
 
     /// Creates a network client.
     /// - Parameters:
@@ -26,6 +27,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     ///   - session: The URLSession to use. Defaults to `.shared`.
     ///   - decoder: The JSON decoder for responses. Defaults to `JSONDecoder()`.
     ///   - encoder: The JSON encoder for request bodies. Defaults to `JSONEncoder()`.
+    ///   - metricsCollector: Optional metrics collector for request telemetry.
     public init(
         environment: NetworkEnvironment,
         interceptors: [any Interceptor] = [],
@@ -33,7 +35,8 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         cache: ResponseCache? = nil,
         session: URLSession = .shared,
         decoder: JSONDecoder = JSONDecoder(),
-        encoder: JSONEncoder = JSONEncoder()
+        encoder: JSONEncoder = JSONEncoder(),
+        metricsCollector: (any MetricsCollector)? = nil
     ) {
         self.environment = environment
         self.interceptors = interceptors
@@ -42,6 +45,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         self.session = session
         self.decoder = decoder
         self.encoder = encoder
+        self.metricsCollector = metricsCollector
     }
 
     /// Executes a request for the given endpoint.
@@ -124,7 +128,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             // Atomically get existing task or create a new one to prevent race conditions.
             // Use Task.detached to isolate from caller's cancellation and task-local values.
             // The shared request should complete independently even if one caller cancels.
-            let task: Task<Data, Error> = await requestTracker.getOrCreate(for: requestKey) {
+            let result: InFlightTaskResult = await requestTracker.getOrCreate(for: requestKey) {
                 Task.detached { [self] in
                     try await performDeduplicatedRequest(
                         urlRequest: finalRequest,
@@ -136,12 +140,51 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                 }
             }
 
+            // Track metrics for deduplicated requests (those waiting for an existing in-flight request)
+            let startTime: Date = Date()
+            let endpointMetadata: EndpointMetadata = EndpointMetadata(endpoint: endpoint, environment: environment)
+            let wasDeduplicatedRequest: Bool = !result.wasCreated
+
             do {
-                let data: Data = try await task.value
+                let data: Data = try await result.task.value
                 await requestTracker.remove(key: requestKey)
+
+                // Only collect metrics for deduplicated waiters; the original request collects its own
+                if wasDeduplicatedRequest {
+                    await collectMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        statusCode: nil,
+                        isSuccess: true,
+                        error: nil,
+                        attempt: 0,
+                        wasFromCache: false,
+                        wasDeduplicatedRequest: true
+                    )
+                }
+
                 return try decodeResponse(data, for: endpoint, request: requestSnapshot, response: nil)
             } catch {
                 await requestTracker.remove(key: requestKey)
+
+                // Only collect metrics for deduplicated waiters
+                if wasDeduplicatedRequest {
+                    let networkError: NetworkError = (error as? NetworkError) ?? NetworkError.unknown(
+                        request: requestSnapshot,
+                        underlyingError: error
+                    )
+                    await collectMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        statusCode: networkError.response?.statusCode,
+                        isSuccess: false,
+                        error: networkError,
+                        attempt: 0,
+                        wasFromCache: false,
+                        wasDeduplicatedRequest: true
+                    )
+                }
+
                 throw error
             }
         }
@@ -178,8 +221,11 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     ) async throws -> Data {
         var lastError: Error?
         let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
+        let endpointMetadata: EndpointMetadata = EndpointMetadata(endpoint: endpoint, environment: environment)
 
         for attempt in 0..<maxAttempts {
+            let startTime: Date = Date()
+
             do {
                 if attempt > 0, let policy = retryPolicy {
                     let delay: TimeInterval = policy.delay(for: attempt - 1)
@@ -192,6 +238,13 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
 
                 if response.statusCode == HTTPStatusCode.notModified, let cachedData, let cache {
                     await cache.updateAfterRevalidation(for: urlRequest, response: response)
+                    await collectSuccessMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        statusCode: response.statusCode,
+                        attempt: attempt,
+                        wasFromCache: true
+                    )
                     return cachedData
                 }
 
@@ -212,26 +265,55 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                     )
                 }
 
+                await collectSuccessMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    statusCode: response.statusCode,
+                    attempt: attempt,
+                    wasFromCache: false
+                )
                 return responseData
 
             } catch {
-                if let networkError = error as? NetworkError,
-                   networkError.kind.isServerError,
+                let networkError: NetworkError = (error as? NetworkError) ?? NetworkError.unknown(
+                    request: requestSnapshot,
+                    underlyingError: error
+                )
+
+                if networkError.kind.isServerError,
                    let cachedData,
                    let cachedMetadata,
                    let staleIfError = cachedMetadata.cacheControl?.staleIfError,
                    cachedMetadata.isStaleButRevalidatable(within: staleIfError) {
+                    await collectSuccessMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        statusCode: networkError.response?.statusCode,
+                        attempt: attempt,
+                        wasFromCache: true
+                    )
                     return cachedData
                 }
 
                 lastError = error
 
                 if let policy = retryPolicy,
-                   let networkError = error as? NetworkError,
                    policy.shouldRetry(error: networkError, attempt: attempt) {
+                    await collectFailureMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        error: networkError,
+                        attempt: attempt
+                    )
                     continue
                 }
 
+                await collectFailureMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    error: networkError,
+                    attempt: attempt
+                )
                 throw error
             }
         }
@@ -252,8 +334,11 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     ) async throws -> E.Response {
         var lastError: Error?
         let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
+        let endpointMetadata: EndpointMetadata = EndpointMetadata(endpoint: endpoint, environment: environment)
 
         for attempt in 0..<maxAttempts {
+            let startTime: Date = Date()
+
             do {
                 if attempt > 0, let policy = retryPolicy {
                     let delay: TimeInterval = policy.delay(for: attempt - 1)
@@ -267,6 +352,13 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
 
                 if response.statusCode == HTTPStatusCode.notModified, let cachedData, let cache {
                     await cache.updateAfterRevalidation(for: urlRequest, response: response)
+                    await collectSuccessMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        statusCode: response.statusCode,
+                        attempt: attempt,
+                        wasFromCache: true
+                    )
                     return try decodeResponse(
                         cachedData,
                         for: endpoint,
@@ -292,6 +384,13 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                     )
                 }
 
+                await collectSuccessMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    statusCode: response.statusCode,
+                    attempt: attempt,
+                    wasFromCache: false
+                )
                 return try decodeResponse(
                     responseData,
                     for: endpoint,
@@ -300,12 +399,23 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                 )
 
             } catch {
-                if let networkError = error as? NetworkError,
-                   networkError.kind.isServerError,
+                let networkError: NetworkError = (error as? NetworkError) ?? NetworkError.unknown(
+                    request: requestSnapshot,
+                    underlyingError: error
+                )
+
+                if networkError.kind.isServerError,
                    let cachedData,
                    let cachedMetadata,
                    let staleIfError = cachedMetadata.cacheControl?.staleIfError,
                    cachedMetadata.isStaleButRevalidatable(within: staleIfError) {
+                    await collectSuccessMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        statusCode: networkError.response?.statusCode,
+                        attempt: attempt,
+                        wasFromCache: true
+                    )
                     return try decodeResponse(
                         cachedData,
                         for: endpoint,
@@ -317,11 +427,22 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                 lastError = error
 
                 if let policy = retryPolicy,
-                   let networkError = error as? NetworkError,
                    policy.shouldRetry(error: networkError, attempt: attempt) {
+                    await collectFailureMetrics(
+                        endpoint: endpointMetadata,
+                        startTime: startTime,
+                        error: networkError,
+                        attempt: attempt
+                    )
                     continue
                 }
 
+                await collectFailureMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    error: networkError,
+                    attempt: attempt
+                )
                 throw error
             }
         }
@@ -371,6 +492,73 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             }
             await cache.store(data: data, for: request, ttl: ttl)
         }
+    }
+
+    /// Collects metrics for a completed request.
+    private func collectMetrics(
+        endpoint: EndpointMetadata,
+        startTime: Date,
+        statusCode: Int?,
+        isSuccess: Bool,
+        error: NetworkError?,
+        attempt: Int,
+        wasFromCache: Bool,
+        wasDeduplicatedRequest: Bool
+    ) async {
+        guard let collector = metricsCollector else { return }
+
+        let metrics: NetworkRequestMetrics = NetworkRequestMetrics(
+            endpoint: endpoint,
+            startTime: startTime,
+            endTime: Date(),
+            statusCode: statusCode,
+            isSuccess: isSuccess,
+            error: error,
+            attempt: attempt,
+            wasFromCache: wasFromCache,
+            wasDeduplicatedRequest: wasDeduplicatedRequest
+        )
+
+        await collector.collect(metrics: metrics)
+    }
+
+    /// Collects metrics for a successful request.
+    private func collectSuccessMetrics(
+        endpoint: EndpointMetadata,
+        startTime: Date,
+        statusCode: Int?,
+        attempt: Int,
+        wasFromCache: Bool
+    ) async {
+        await collectMetrics(
+            endpoint: endpoint,
+            startTime: startTime,
+            statusCode: statusCode,
+            isSuccess: true,
+            error: nil,
+            attempt: attempt,
+            wasFromCache: wasFromCache,
+            wasDeduplicatedRequest: false
+        )
+    }
+
+    /// Collects metrics for a failed request.
+    private func collectFailureMetrics(
+        endpoint: EndpointMetadata,
+        startTime: Date,
+        error: NetworkError,
+        attempt: Int
+    ) async {
+        await collectMetrics(
+            endpoint: endpoint,
+            startTime: startTime,
+            statusCode: error.response?.statusCode,
+            isSuccess: false,
+            error: error,
+            attempt: attempt,
+            wasFromCache: false,
+            wasDeduplicatedRequest: false
+        )
     }
 
     /// Performs the actual network request.
@@ -589,8 +777,11 @@ extension NetworkClient {
 
         var lastError: Error?
         let maxAttempts: Int = (retryPolicy?.maxRetries ?? 0) + 1
+        let endpointMetadata: EndpointMetadata = EndpointMetadata(endpoint: endpoint, environment: environment)
 
         for attempt in 0..<maxAttempts {
+            let startTime: Date = Date()
+
             do {
                 if attempt > 0 {
                     delegate.reset()
@@ -640,12 +831,24 @@ extension NetworkClient {
 
                 try validateResponse(httpResponse, request: requestSnapshot, data: responseData)
 
+                await collectSuccessMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    statusCode: httpResponse.statusCode,
+                    attempt: attempt,
+                    wasFromCache: false
+                )
                 return try decodeResponse(responseData, for: endpoint, request: requestSnapshot, response: responseSnapshot)
 
             } catch let urlError as URLError {
                 let networkError: NetworkError = mapURLError(urlError, request: requestSnapshot)
                 lastError = networkError
-
+                await collectFailureMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    error: networkError,
+                    attempt: attempt
+                )
                 if let policy = retryPolicy, policy.shouldRetry(error: networkError, attempt: attempt) {
                     continue
                 }
@@ -653,7 +856,12 @@ extension NetworkClient {
 
             } catch let networkError as NetworkError {
                 lastError = networkError
-
+                await collectFailureMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    error: networkError,
+                    attempt: attempt
+                )
                 if let policy = retryPolicy, policy.shouldRetry(error: networkError, attempt: attempt) {
                     continue
                 }
@@ -661,7 +869,14 @@ extension NetworkClient {
 
             } catch {
                 lastError = error
-                throw NetworkError.unknown(request: requestSnapshot, underlyingError: error)
+                let networkError: NetworkError = NetworkError.unknown(request: requestSnapshot, underlyingError: error)
+                await collectFailureMetrics(
+                    endpoint: endpointMetadata,
+                    startTime: startTime,
+                    error: networkError,
+                    attempt: attempt
+                )
+                throw networkError
             }
         }
 
@@ -691,39 +906,66 @@ extension NetworkClient {
         }
 
         let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
+        let endpointMetadata: EndpointMetadata = EndpointMetadata(endpoint: endpoint, environment: environment)
+        let startTime: Date = Date()
 
-        return try await withCheckedThrowingContinuation { checkedContinuation in
-            let delegate: DownloadProgressDelegate = DownloadProgressDelegate(
-                destination: destination,
-                continuation: continuation
-            ) { result in
-                switch result {
-                case .success(let url):
-                    checkedContinuation.resume(returning: url)
-                case .failure(let error):
-                    if let urlError = error as? URLError {
-                        let networkError: NetworkError = self.mapURLError(urlError, request: requestSnapshot)
-                        checkedContinuation.resume(throwing: networkError)
-                    } else if let networkError = error as? NetworkError {
-                        checkedContinuation.resume(throwing: networkError)
-                    } else {
-                        checkedContinuation.resume(throwing: NetworkError.unknown(
-                            request: requestSnapshot,
-                            underlyingError: error
-                        ))
+        do {
+            let result: URL = try await withCheckedThrowingContinuation { checkedContinuation in
+                let delegate: DownloadProgressDelegate = DownloadProgressDelegate(
+                    destination: destination,
+                    continuation: continuation
+                ) { result in
+                    switch result {
+                    case .success(let url):
+                        checkedContinuation.resume(returning: url)
+                    case .failure(let error):
+                        if let urlError = error as? URLError {
+                            let networkError: NetworkError = self.mapURLError(urlError, request: requestSnapshot)
+                            checkedContinuation.resume(throwing: networkError)
+                        } else if let networkError = error as? NetworkError {
+                            checkedContinuation.resume(throwing: networkError)
+                        } else {
+                            checkedContinuation.resume(throwing: NetworkError.unknown(
+                                request: requestSnapshot,
+                                underlyingError: error
+                            ))
+                        }
                     }
                 }
+
+                let downloadSession: URLSession = URLSession(
+                    configuration: session.configuration,
+                    delegate: delegate,
+                    delegateQueue: nil
+                )
+                delegate.setSession(downloadSession)
+
+                let task: URLSessionDownloadTask = downloadSession.downloadTask(with: urlRequest)
+                task.resume()
             }
 
-            let downloadSession: URLSession = URLSession(
-                configuration: session.configuration,
-                delegate: delegate,
-                delegateQueue: nil
+            // Download delegate doesn't expose HTTP status code; use nil
+            await collectSuccessMetrics(
+                endpoint: endpointMetadata,
+                startTime: startTime,
+                statusCode: nil,
+                attempt: 0,
+                wasFromCache: false
             )
-            delegate.setSession(downloadSession)
+            return result
 
-            let task: URLSessionDownloadTask = downloadSession.downloadTask(with: urlRequest)
-            task.resume()
+        } catch {
+            let networkError: NetworkError = (error as? NetworkError) ?? NetworkError.unknown(
+                request: requestSnapshot,
+                underlyingError: error
+            )
+            await collectFailureMetrics(
+                endpoint: endpointMetadata,
+                startTime: startTime,
+                error: networkError,
+                attempt: 0
+            )
+            throw networkError
         }
     }
 }
