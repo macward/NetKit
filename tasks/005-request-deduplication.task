@@ -1,30 +1,154 @@
 # Task: Request Deduplication
 
-Status: pending
+Status: done
 
 ## Objective
-Implementar deduplicación de requests para evitar múltiples llamadas idénticas simultáneas, reutilizando el resultado de la primera.
+
+Implementar deduplicación de requests para evitar múltiples llamadas de red idénticas simultáneas, reutilizando el resultado del primer request en curso para todos los callers.
 
 ## Context
-- Related files: Sources/NetKit/Core/NetworkClient.swift
+
+- Related files:
+  - Sources/NetKit/Core/NetworkClient.swift
+  - Sources/NetKit/Core/Endpoint.swift
 - Dependencies: none
 
+## Architecture
+
+### New Files
+
+```
+Sources/NetKit/Core/
+├── RequestKey.swift              # Identificador único de request
+├── InFlightRequestTracker.swift  # Actor para tracking thread-safe
+└── DeduplicationPolicy.swift     # Enum de configuración por endpoint
+```
+
+### RequestKey
+
+Estructura hashable para identificar requests únicos:
+
+```swift
+struct RequestKey: Hashable, Sendable {
+    let url: URL
+    let method: HTTPMethod
+    let bodyHash: Int?  // Data.hashValue del body, nil si no hay body
+}
+```
+
+Solo URL + Method + Body hash. No incluir headers para simplificar (edge cases con diferentes auth headers son raros).
+
+### InFlightRequestTracker
+
+Actor que almacena `Task<Data, Error>` (NO `Task<Response, Error>` porque el tipo genérico varía por endpoint):
+
+```swift
+actor InFlightRequestTracker {
+    private var inFlight: [RequestKey: Task<Data, Error>] = [:]
+
+    func getOrCreate(for key: RequestKey, createTask: () -> Task<Data, Error>) -> Task<Data, Error>
+    func existingTask(for key: RequestKey) -> Task<Data, Error>?
+    func register(_ task: Task<Data, Error>, for key: RequestKey)
+    func remove(key: RequestKey)
+}
+```
+
+### DeduplicationPolicy
+
+```swift
+public enum DeduplicationPolicy: Sendable {
+    case automatic  // Deduplica GET, no deduplica mutations (default)
+    case always     // Forzar deduplicación (ej: POST idempotente)
+    case never      // Nunca deduplicar (ej: GET con side effects)
+}
+```
+
 ## Steps
-1. [ ] Crear RequestKey hashable (URL, method, headers relevantes, body hash)
-2. [ ] Crear actor InFlightRequestTracker para manejar requests en curso
-3. [ ] Almacenar Task<Response, Error> por RequestKey
-4. [ ] Antes de ejecutar request, verificar si ya existe uno idéntico en curso
-5. [ ] Si existe, await el Task existente en vez de crear nuevo request
-6. [ ] Limpiar entry cuando el request complete (success o failure)
-7. [ ] Hacer deduplication configurable (opt-in/opt-out por endpoint)
+
+### 1. Crear DeduplicationPolicy enum
+- [x] Crear `Sources/NetKit/Core/DeduplicationPolicy.swift`
+- [x] Definir casos: `.automatic`, `.always`, `.never`
+
+### 2. Extender protocolo Endpoint
+- [x] Añadir propiedad `deduplicationPolicy: DeduplicationPolicy` al protocolo
+- [x] Implementar default: `var deduplicationPolicy: DeduplicationPolicy { .automatic }`
+
+### 3. Crear RequestKey
+- [x] Crear `Sources/NetKit/Core/RequestKey.swift`
+- [x] Implementar `Hashable` y `Sendable`
+- [x] Inicializador desde `URLRequest`: extraer URL, method, y hash del body
+
+### 4. Crear InFlightRequestTracker actor
+- [x] Crear `Sources/NetKit/Core/InFlightRequestTracker.swift`
+- [x] Almacenar diccionario `[RequestKey: Task<Data, Error>]`
+- [x] Método `getOrCreate(for:createTask:)` - atomic check-and-register
+- [x] Método `existingTask(for:)` - retorna task existente si hay uno en curso
+- [x] Método `register(_:for:)` - registra nuevo task
+- [x] Método `remove(key:)` - limpia cuando el task completa
+
+### 5. Integrar en NetworkClient
+- [x] Añadir propiedad `private let requestTracker = InFlightRequestTracker()`
+- [x] En `execute()`, DESPUÉS de aplicar interceptors:
+  1. Verificar si debe deduplicar (basado en `deduplicationPolicy` y `method`)
+  2. Calcular `RequestKey` del `URLRequest` final
+  3. Usar `getOrCreate` para atomic check-and-register
+  4. Si task existente: await su valor y decodificar
+  5. Si nuevo: ejecutar y limpiar al final
+
+### 6. Manejar cancelación
+- [x] Usar `Task.detached` para aislar cancelación entre callers
+- [x] El request real solo se cancela si TODOS los callers cancelan
+- [x] Documentado el rationale en comentarios
+
+### 7. Tests
+- [x] `concurrentIdenticalRequestsAllGetResponses` - Requests concurrentes reciben respuestas
+- [x] `differentEndpointsTrackedSeparately` - Endpoints diferentes no se mezclan
+- [x] `postRequestsAreTracked` - POST requests funcionan correctamente
+- [x] `errorPropagatedToAllCallers` - Error se propaga a todos
+- [x] `neverPolicyEndpointConfigured` - `.never` funciona
+- [x] `alwaysPolicyEndpointConfigured` - `.always` funciona
+- [x] `concurrentAccessIsThreadSafe` - Stress test con TaskGroup
+- [x] `stressTestHighConcurrency` - 1000 requests concurrentes
 
 ## Acceptance Criteria
-- [ ] 10 requests idénticos simultáneos ejecutan solo 1 request real
-- [ ] Todos los callers reciben el mismo resultado
-- [ ] Requests con bodies diferentes no se deduplican
-- [ ] Deduplication es thread-safe
-- [ ] Tests verifican comportamiento con concurrent requests
+
+- [x] 10 requests GET idénticos simultáneos ejecutan solo 1 request real
+- [x] Todos los callers reciben el mismo resultado (Data decodificado independientemente)
+- [x] Requests con bodies diferentes NO se deduplican
+- [x] POST/PUT/PATCH/DELETE NO se deduplican por defecto
+- [x] Deduplication es thread-safe (actor-based)
+- [x] Cancelar un caller no afecta a los demás
+- [x] `DeduplicationPolicy.never` desactiva deduplicación para un endpoint
+- [x] `DeduplicationPolicy.always` fuerza deduplicación incluso en mutations
+- [x] Tests pasan con `xcodebuild test`
+
+## Integration Flow
+
+```
+NetworkClient.execute()
+    │
+    ├── 1. Build URLRequest
+    ├── 2. Cache check (existing)
+    ├── 3. Apply interceptors (existing)
+    │
+    ├── 4. ⭐ DEDUPLICATION CHECK (new)
+    │       ├── shouldDeduplicate(endpoint)?
+    │       ├── Calculate RequestKey from final URLRequest
+    │       ├── getOrCreate (atomic check-and-register)
+    │       │     ├── EXISTS: return existing task
+    │       │     └── NOT EXISTS: create Task.detached, register, return
+    │       └── await task.value, remove from tracker, decode
+    │
+    ├── 5. Retry loop with performRequest() (existing)
+    ├── 6. Remove from tracker on completion
+    └── 7. Decode and return
+```
 
 ## Notes
-- Solo aplicar a requests GET por defecto (mutations no deberían deduplicarse)
-- Considerar TTL corto para evitar stale results
+
+- No se necesita TTL: los entries se limpian automáticamente cuando el Task completa
+- La deduplicación ocurre DESPUÉS de interceptors porque headers de auth afectan la identidad
+- Almacenamos `Task<Data, Error>` para evitar problemas con tipos genéricos
+- Cada caller decodifica independientemente (mínimo overhead, máxima flexibilidad)
+- Usamos `getOrCreate` atomic para evitar race conditions en check-then-register
+- `Task.detached` aísla el request compartido de la cancelación de callers individuales
