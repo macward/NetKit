@@ -31,14 +31,14 @@ public protocol NetworkClientProtocol: Sendable {
     ///   - file: The URL of the file to upload.
     ///   - endpoint: The endpoint to upload to.
     /// - Returns: An `UploadResult` containing progress stream and response task.
-    func upload<E: Endpoint>(file: URL, to endpoint: E) -> UploadResult<E.Response>
+    func upload<E: Endpoint>(file: URL, to endpoint: E) async -> UploadResult<E.Response>
 
     /// Uploads multipart form data to the specified endpoint with progress tracking.
     /// - Parameters:
     ///   - formData: The multipart form data to upload.
     ///   - endpoint: The endpoint to upload to.
     /// - Returns: An `UploadResult` containing progress stream and response task.
-    func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) -> UploadResult<E.Response>
+    func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) async -> UploadResult<E.Response>
 
     // MARK: - Download Methods
 
@@ -47,5 +47,5 @@ public protocol NetworkClientProtocol: Sendable {
     ///   - endpoint: The endpoint to download from.
     ///   - destination: The URL where the file should be saved.
     /// - Returns: A `DownloadResult` containing progress stream and response task.
-    func download<E: Endpoint>(from endpoint: E, to destination: URL) -> DownloadResult
+    func download<E: Endpoint>(from endpoint: E, to destination: URL) async -> DownloadResult
 }

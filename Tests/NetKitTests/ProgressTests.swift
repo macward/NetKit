@@ -350,7 +350,7 @@ struct MockNetworkClientUploadTests {
 
         await client.stubUpload(UploadEndpoint.self) { _ in expectedResponse }
 
-        let result: UploadResult<UploadResponse> = client.upload(
+        let result: UploadResult<UploadResponse> = await client.upload(
             file: URL(fileURLWithPath: "/tmp/test.txt"),
             to: UploadEndpoint()
         )
@@ -366,8 +366,8 @@ struct MockNetworkClientUploadTests {
             UploadResponse(fileId: "123", size: 1024)
         }
 
-        _ = client.upload(file: URL(fileURLWithPath: "/tmp/test.txt"), to: UploadEndpoint())
-        _ = client.upload(file: URL(fileURLWithPath: "/tmp/test2.txt"), to: UploadEndpoint())
+        _ = await client.upload(file: URL(fileURLWithPath: "/tmp/test.txt"), to: UploadEndpoint())
+        _ = await client.upload(file: URL(fileURLWithPath: "/tmp/test2.txt"), to: UploadEndpoint())
 
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -385,7 +385,7 @@ struct MockNetworkClientUploadTests {
         let formData: MultipartFormData = MultipartFormData()
         formData.append(value: "test", name: "name")
 
-        let result: UploadResult<UploadResponse> = client.upload(formData: formData, to: UploadEndpoint())
+        let result: UploadResult<UploadResponse> = await client.upload(formData: formData, to: UploadEndpoint())
 
         let response: UploadResponse = try await result.response.value
         #expect(response == expectedResponse)
@@ -407,7 +407,7 @@ struct MockNetworkClientUploadTests {
             UploadResponse(fileId: "123", size: 1000)
         }
 
-        let result: UploadResult<UploadResponse> = client.upload(
+        let result: UploadResult<UploadResponse> = await client.upload(
             file: URL(fileURLWithPath: "/tmp/test.txt"),
             to: UploadEndpoint()
         )
@@ -425,7 +425,7 @@ struct MockNetworkClientUploadTests {
         let client: MockNetworkClient = MockNetworkClient()
         await client.stubError(UploadEndpoint.self, error: .timeout())
 
-        let result: UploadResult<UploadResponse> = client.upload(
+        let result: UploadResult<UploadResponse> = await client.upload(
             file: URL(fileURLWithPath: "/tmp/test.txt"),
             to: UploadEndpoint()
         )
@@ -453,7 +453,7 @@ struct MockNetworkClientDownloadTests {
             destinationURL: destination
         )
 
-        let result: DownloadResult = client.download(
+        let result: DownloadResult = await client.download(
             from: DownloadEndpoint(fileId: "123"),
             to: destination
         )
@@ -472,8 +472,8 @@ struct MockNetworkClientDownloadTests {
             destinationURL: destination
         )
 
-        _ = client.download(from: DownloadEndpoint(fileId: "1"), to: destination)
-        _ = client.download(from: DownloadEndpoint(fileId: "2"), to: destination)
+        _ = await client.download(from: DownloadEndpoint(fileId: "1"), to: destination)
+        _ = await client.download(from: DownloadEndpoint(fileId: "2"), to: destination)
 
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -497,7 +497,7 @@ struct MockNetworkClientDownloadTests {
             destinationURL: destination
         )
 
-        let result: DownloadResult = client.download(
+        let result: DownloadResult = await client.download(
             from: DownloadEndpoint(fileId: "123"),
             to: destination
         )
@@ -517,7 +517,7 @@ struct MockNetworkClientDownloadTests {
 
         await client.stubError(DownloadEndpoint.self, error: .notFound())
 
-        let result: DownloadResult = client.download(
+        let result: DownloadResult = await client.download(
             from: DownloadEndpoint(fileId: "123"),
             to: destination
         )
@@ -530,5 +530,96 @@ struct MockNetworkClientDownloadTests {
         } catch {
             Issue.record("Unexpected error type: \(error)")
         }
+    }
+}
+
+@Suite("MockNetworkClient Concurrent Access Tests")
+struct MockNetworkClientConcurrentAccessTests {
+    @Test("Concurrent uploads are thread-safe")
+    func concurrentUploadsAreThreadSafe() async throws {
+        let client: MockNetworkClient = MockNetworkClient()
+
+        await client.stubUpload(UploadEndpoint.self) { endpoint in
+            UploadResponse(fileId: "file-123", size: 100)
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<50 {
+                group.addTask {
+                    let result: UploadResult<UploadResponse> = await client.upload(
+                        file: URL(fileURLWithPath: "/tmp/test-\(index).txt"),
+                        to: UploadEndpoint()
+                    )
+                    _ = try? await result.response.value
+                }
+            }
+        }
+
+        let callCount: Int = await client.callCount(for: UploadEndpoint.self)
+        #expect(callCount == 50)
+    }
+
+    @Test("Concurrent downloads are thread-safe")
+    func concurrentDownloadsAreThreadSafe() async throws {
+        let client: MockNetworkClient = MockNetworkClient()
+        let destination: URL = URL(fileURLWithPath: "/tmp/downloaded.txt")
+
+        await client.stubDownload(
+            DownloadEndpoint.self,
+            destinationURL: destination
+        )
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<50 {
+                group.addTask {
+                    let result: DownloadResult = await client.download(
+                        from: DownloadEndpoint(fileId: "\(index)"),
+                        to: destination
+                    )
+                    _ = try? await result.response.value
+                }
+            }
+        }
+
+        let callCount: Int = await client.callCount(for: DownloadEndpoint.self)
+        #expect(callCount == 50)
+    }
+
+    @Test("Concurrent mixed operations are thread-safe")
+    func concurrentMixedOperationsAreThreadSafe() async throws {
+        let client: MockNetworkClient = MockNetworkClient()
+        let destination: URL = URL(fileURLWithPath: "/tmp/downloaded.txt")
+
+        await client.stubUpload(UploadEndpoint.self) { _ in
+            UploadResponse(fileId: "123", size: 1024)
+        }
+        await client.stubDownload(
+            DownloadEndpoint.self,
+            destinationURL: destination
+        )
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<25 {
+                group.addTask {
+                    let result: UploadResult<UploadResponse> = await client.upload(
+                        file: URL(fileURLWithPath: "/tmp/test-\(index).txt"),
+                        to: UploadEndpoint()
+                    )
+                    _ = try? await result.response.value
+                }
+                group.addTask {
+                    let result: DownloadResult = await client.download(
+                        from: DownloadEndpoint(fileId: "\(index)"),
+                        to: destination
+                    )
+                    _ = try? await result.response.value
+                }
+            }
+        }
+
+        let uploadCount: Int = await client.callCount(for: UploadEndpoint.self)
+        let downloadCount: Int = await client.callCount(for: DownloadEndpoint.self)
+        #expect(uploadCount == 25)
+        #expect(downloadCount == 25)
     }
 }
