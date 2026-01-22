@@ -6,12 +6,13 @@ public enum RetryDelay: Sendable {
     case immediate
     /// Fixed delay between retries.
     case fixed(TimeInterval)
-    /// Exponential backoff with optional jitter.
+    /// Exponential backoff with optional jitter and maximum delay cap.
     /// - Parameters:
     ///   - base: The initial delay duration.
     ///   - multiplier: The multiplier applied for each subsequent attempt.
     ///   - jitter: Random variation factor (0.0 to 1.0). Defaults to 0.
-    case exponential(base: TimeInterval, multiplier: Double, jitter: Double = 0)
+    ///   - maxDelay: Maximum delay cap in seconds. Defaults to 60 seconds.
+    case exponential(base: TimeInterval, multiplier: Double, jitter: Double = 0, maxDelay: TimeInterval = 60)
 
     /// Calculates the delay for a given attempt number.
     /// - Parameter attempt: The attempt number (0-based).
@@ -22,14 +23,17 @@ public enum RetryDelay: Sendable {
             return 0
         case .fixed(let interval):
             return interval
-        case .exponential(let base, let multiplier, let jitter):
-            let exponentialDelay = base * pow(multiplier, Double(attempt))
+        case .exponential(let base, let multiplier, let jitter, let maxDelay):
+            let exponentialDelay: TimeInterval = base * pow(multiplier, Double(attempt))
+            let cappedDelay: TimeInterval = min(exponentialDelay, maxDelay)
             if jitter > 0 {
-                let jitterRange = exponentialDelay * jitter
-                let randomJitter = Double.random(in: -jitterRange...jitterRange)
-                return max(0, exponentialDelay + randomJitter)
+                // Jitter is applied after capping to guarantee the delay never exceeds maxDelay.
+                // This creates asymmetric jitter when capped (negative jitter applies, positive is clamped).
+                let jitterRange: TimeInterval = cappedDelay * jitter
+                let randomJitter: TimeInterval = Double.random(in: -jitterRange...jitterRange)
+                return min(max(0, cappedDelay + randomJitter), maxDelay)
             }
-            return exponentialDelay
+            return cappedDelay
         }
     }
 }
@@ -48,11 +52,11 @@ public struct RetryPolicy: Sendable {
     /// Creates a retry policy with custom configuration.
     /// - Parameters:
     ///   - maxRetries: Maximum number of retry attempts. Defaults to 3.
-    ///   - delay: The delay strategy. Defaults to exponential backoff.
+    ///   - delay: The delay strategy. Defaults to exponential backoff with 60s max delay.
     ///   - shouldRetry: A closure that determines if an error is retryable.
     public init(
         maxRetries: Int = 3,
-        delay: RetryDelay = .exponential(base: 1.0, multiplier: 2.0, jitter: 0.1),
+        delay: RetryDelay = .exponential(base: 1.0, multiplier: 2.0, jitter: 0.1, maxDelay: 60),
         shouldRetry: @escaping @Sendable (NetworkError) -> Bool
     ) {
         self.maxRetries = maxRetries
@@ -63,10 +67,10 @@ public struct RetryPolicy: Sendable {
     /// Creates a retry policy with default retryable errors.
     /// - Parameters:
     ///   - maxRetries: Maximum number of retry attempts. Defaults to 3.
-    ///   - delay: The delay strategy. Defaults to exponential backoff.
+    ///   - delay: The delay strategy. Defaults to exponential backoff with 60s max delay.
     public init(
         maxRetries: Int = 3,
-        delay: RetryDelay = .exponential(base: 1.0, multiplier: 2.0, jitter: 0.1)
+        delay: RetryDelay = .exponential(base: 1.0, multiplier: 2.0, jitter: 0.1, maxDelay: 60)
     ) {
         self.maxRetries = maxRetries
         self.delay = delay

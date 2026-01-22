@@ -266,11 +266,59 @@ struct RetryPolicyTests {
 
     @Test("Exponential delay increases")
     func exponentialDelay() {
-        let policy = RetryPolicy(maxRetries: 3, delay: .exponential(base: 1.0, multiplier: 2.0, jitter: 0))
+        let policy = RetryPolicy(maxRetries: 3, delay: .exponential(base: 1.0, multiplier: 2.0, jitter: 0, maxDelay: 1000))
 
         #expect(policy.delay(for: 0) == 1.0)
         #expect(policy.delay(for: 1) == 2.0)
         #expect(policy.delay(for: 2) == 4.0)
+    }
+
+    @Test("Exponential delay is capped at maxDelay")
+    func exponentialDelayCapped() {
+        let policy = RetryPolicy(maxRetries: 10, delay: .exponential(base: 1.0, multiplier: 2.0, jitter: 0, maxDelay: 10))
+
+        #expect(policy.delay(for: 0) == 1.0)   // 1 * 2^0 = 1 (below cap)
+        #expect(policy.delay(for: 1) == 2.0)   // 1 * 2^1 = 2 (below cap)
+        #expect(policy.delay(for: 2) == 4.0)   // 1 * 2^2 = 4 (below cap)
+        #expect(policy.delay(for: 3) == 8.0)   // 1 * 2^3 = 8 (below cap)
+        #expect(policy.delay(for: 4) == 10.0)  // 1 * 2^4 = 16 -> capped to 10
+        #expect(policy.delay(for: 5) == 10.0)  // 1 * 2^5 = 32 -> capped to 10
+        #expect(policy.delay(for: 10) == 10.0) // 1 * 2^10 = 1024 -> capped to 10
+    }
+
+    @Test("Large attempt numbers are capped and do not overflow")
+    func largeAttemptNumbersCapped() {
+        let policy = RetryPolicy(maxRetries: 100, delay: .exponential(base: 1.0, multiplier: 2.0, jitter: 0, maxDelay: 60))
+
+        // Attempt 30 would be 1 * 2^30 = ~1 billion seconds without cap
+        let delay30: TimeInterval = policy.delay(for: 30)
+        #expect(delay30 == 60.0)
+
+        // Attempt 50 would overflow without cap
+        let delay50: TimeInterval = policy.delay(for: 50)
+        #expect(delay50 == 60.0)
+    }
+
+    @Test("Default maxDelay is 60 seconds")
+    func defaultMaxDelay() {
+        let policy = RetryPolicy(maxRetries: 20)
+
+        // Attempt 10 would be 1024 seconds without cap
+        let delay: TimeInterval = policy.delay(for: 10)
+        #expect(delay <= 60.0)
+    }
+
+    @Test("Jitter does not exceed maxDelay")
+    func jitterDoesNotExceedMaxDelay() {
+        let maxDelay: TimeInterval = 10.0
+        let policy = RetryPolicy(maxRetries: 20, delay: .exponential(base: 1.0, multiplier: 2.0, jitter: 0.5, maxDelay: maxDelay))
+
+        // Run multiple times to test jitter randomness
+        for _ in 0..<100 {
+            let delay: TimeInterval = policy.delay(for: 10)
+            #expect(delay <= maxDelay, "Delay with jitter should never exceed maxDelay")
+            #expect(delay >= 0, "Delay should never be negative")
+        }
     }
 }
 
