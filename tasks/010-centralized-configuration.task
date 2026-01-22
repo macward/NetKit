@@ -1,6 +1,36 @@
 # Task: Centralized Configuration
 
-Status: pending
+Status: rejected
+
+## Rejection Reason
+
+El init actual de NetworkClient ya es idiomático y funcional:
+
+```swift
+public init(
+    environment: NetworkEnvironment,           // ÚNICO requerido
+    interceptors: [any Interceptor] = [],
+    retryPolicy: RetryPolicy? = nil,
+    cache: ResponseCache? = nil,
+    session: URLSession = .shared,
+    decoder: JSONDecoder = JSONDecoder(),
+    encoder: JSONEncoder = JSONEncoder(),
+    metricsCollector: (any MetricsCollector)? = nil
+)
+```
+
+**Motivos del rechazo:**
+
+1. **Builder pattern no es idiomático en Swift** - Swift usa structs con defaults y named parameters, no builders al estilo Java
+2. **7 de 8 parámetros ya tienen defaults sensatos** - El init actual es fácil de usar
+3. **Duplicación innecesaria** - NetworkConfiguration tendría exactamente los mismos campos que el init
+4. **Cognitive load** - Dos formas de configurar lo mismo confunde a los usuarios
+5. **Presets pueden ser factory methods** - No requieren struct adicional:
+   ```swift
+   extension NetworkClient {
+       static func development(environment: NetworkEnvironment) -> NetworkClient { ... }
+   }
+   ```
 
 ## Objective
 Crear NetworkConfiguration struct que centralice toda la configuración del cliente en un solo lugar.
@@ -10,20 +40,20 @@ Crear NetworkConfiguration struct que centralice toda la configuración del clie
 - Dependencies: 001, 003, 006, 008 (usa tipos de esas tasks)
 
 ## Steps
-1. [ ] Crear struct NetworkConfiguration con todos los parámetros
-2. [ ] Agregar defaults sensatos para cada campo
-3. [ ] Crear NetworkConfiguration.Builder para construcción fluida
-4. [ ] Agregar presets (minimal, development, production)
-5. [ ] Actualizar NetworkClient init para aceptar configuration
-6. [ ] Mantener init actual como convenience que crea config internamente
-7. [ ] Documentar cada opción de configuración
+1. [x] Crear struct NetworkConfiguration con todos los parámetros (No necesario - init actual suficiente)
+2. [x] Agregar defaults sensatos para cada campo (Ya existen en init)
+3. [-] Crear NetworkConfiguration.Builder para construcción fluida (Anti-patrón en Swift)
+4. [-] Agregar presets (minimal, development, production) (Usar factory methods si se necesita)
+5. [-] Actualizar NetworkClient init para aceptar configuration
+6. [-] Mantener init actual como convenience que crea config internamente
+7. [x] Documentar cada opción de configuración (Ya documentado en init)
 
 ## Acceptance Criteria
-- [ ] Toda la config en un solo struct
-- [ ] Builder pattern funciona para construcción incremental
-- [ ] Presets cubren casos de uso comunes
-- [ ] Backward compatible con init actual
-- [ ] Tests verifican diferentes configuraciones
+- [x] Toda la config en un solo struct (Init actual cumple el propósito)
+- [-] Builder pattern funciona para construcción incremental (No idiomático)
+- [-] Presets cubren casos de uso comunes (Factory methods si se necesita)
+- [x] Backward compatible con init actual
+- [x] Tests verifican diferentes configuraciones
 
 ## Notes
 - Esta task depende de otras para tener todos los tipos necesarios

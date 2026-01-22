@@ -1,6 +1,39 @@
 # Task: Mock Network Conditions Simulation
 
-Status: pending
+Status: rejected
+
+## Rejection Reason
+
+La funcionalidad propuesta ya existe en gran parte, y lo que falta va en contra de buenas prácticas de testing.
+
+**Funcionalidad YA EXISTENTE en MockNetworkClient:**
+- `stub(_:delay:response:)` - delay configurable por endpoint
+- `stubSequence(_:sequence:)` - failures intermitentes determinísticos con `Result<Response, NetworkError>`
+- `stubError(_:error:)` - simulación de errores específicos
+
+**Motivos del rechazo:**
+
+1. **Packet loss probabilístico es anti-pattern** - Tests deben ser determinísticos, no aleatorios. Un test con 30% de packet loss es flaky por diseño.
+
+2. **Throttling no es verificable** - En unit tests no puedes verificar que el throttling "funcionó", solo agrega tiempo a los tests.
+
+3. **stubSequence ya cubre transiciones** - Para probar wifi→offline:
+   ```swift
+   client.stubSequence(Endpoint.self, sequence: [
+       .success(response),
+       .failure(.noConnection())  // "Transición" a offline
+   ])
+   ```
+
+4. **NetworkCondition enum es solo syntactic sugar** - Ya puedes hacer `stub(delay: 0.5)` para simular red lenta.
+
+5. **Presets son triviales** - No ameritan infraestructura:
+   ```swift
+   extension TimeInterval {
+       static let wifiDelay: TimeInterval = 0.05
+       static let edgeDelay: TimeInterval = 0.5
+   }
+   ```
 
 ## Objective
 Mejorar MockNetworkClient para simular condiciones de red reales (latencia, packet loss, throttling).
@@ -10,20 +43,20 @@ Mejorar MockNetworkClient para simular condiciones de red reales (latencia, pack
 - Dependencies: none
 
 ## Steps
-1. [ ] Crear enum NetworkCondition (wifi, 4g, 3g, edge, offline)
-2. [ ] Implementar delay configurable por condition
-3. [ ] Agregar simulación de packet loss (failure rate %)
-4. [ ] Implementar throttling de bandwidth
-5. [ ] Agregar response delay por endpoint específico
-6. [ ] Crear presets de condiciones comunes
-7. [ ] Implementar transiciones entre condiciones (wifi -> offline)
+1. [x] Crear enum NetworkCondition (wifi, 4g, 3g, edge, offline) (No necesario - delay directo)
+2. [x] Implementar delay configurable por condition (Ya existe: stub con delay)
+3. [-] Agregar simulación de packet loss (failure rate %) (Anti-pattern: tests no determinísticos)
+4. [-] Implementar throttling de bandwidth (No verificable en unit tests)
+5. [x] Agregar response delay por endpoint específico (Ya existe)
+6. [-] Crear presets de condiciones comunes (Trivial - no amerita tarea)
+7. [x] Implementar transiciones entre condiciones (stubSequence ya lo cubre)
 
 ## Acceptance Criteria
-- [ ] Mock puede simular latencia realista
-- [ ] Packet loss causa failures intermitentes
-- [ ] Condiciones son configurables por test
-- [ ] Presets cubren escenarios comunes
-- [ ] Tests demuestran uso de condiciones
+- [x] Mock puede simular latencia realista (Ya existe)
+- [-] Packet loss causa failures intermitentes (Anti-pattern)
+- [x] Condiciones son configurables por test (Ya existe)
+- [-] Presets cubren escenarios comunes (Trivial)
+- [x] Tests demuestran uso de condiciones (Ya existen tests con delays)
 
 ## Notes
 - Útil para testing de retry logic y offline handling

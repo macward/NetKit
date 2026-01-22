@@ -1,6 +1,31 @@
 # Task: WebSocket Support
 
-Status: pending
+Status: rejected
+
+## Rejection Reason
+
+WebSocket está fuera del scope de NetKit como HTTP client.
+
+**Motivos del rechazo:**
+
+1. **Protocolo diferente** - WebSocket (RFC 6455) no es HTTP. NetKit es un HTTP client, no un cliente de networking general.
+
+2. **URLSessionWebSocketTask ya es simple** - Apple proporciona una API limpia que no necesita abstracción:
+   ```swift
+   let task = session.webSocketTask(with: url)
+   task.resume()
+   let message = try await task.receive()
+   ```
+
+3. **Scope creep** - Agregar WebSocket expandiría significativamente el alcance de la librería sin beneficio claro sobre usar URLSessionWebSocketTask directamente.
+
+4. **Complejidad significativa** - Requiere implementar estado de conexión, ping/pong, fragmentación, reconexión con backoff, close codes - todo un subsistema nuevo.
+
+5. **No hay reutilización real** - Los interceptors HTTP no aplican a WebSocket (diferente lifecycle, diferentes headers).
+
+6. **Mantenimiento** - Dos subsistemas completamente diferentes para mantener.
+
+**Alternativa recomendada:** Usar `URLSessionWebSocketTask` directamente para casos que requieran WebSocket.
 
 ## Objective
 Agregar soporte para conexiones WebSocket como alternativa más eficiente a long polling.
@@ -10,21 +35,21 @@ Agregar soporte para conexiones WebSocket como alternativa más eficiente a long
 - Dependencies: none
 
 ## Steps
-1. [ ] Crear protocolo WebSocketEndpoint (path, onMessage, onError, onClose)
-2. [ ] Implementar WebSocketConnection actor usando URLSessionWebSocketTask
-3. [ ] Crear AsyncStream para recibir mensajes
-4. [ ] Implementar reconexión automática con backoff
-5. [ ] Agregar soporte para ping/pong heartbeat
-6. [ ] Implementar send message con diferentes tipos (text, binary)
-7. [ ] Integrar con interceptors para auth headers
-8. [ ] Documentar uso y diferencias vs long polling
+1. [-] Crear protocolo WebSocketEndpoint (Fuera de scope)
+2. [-] Implementar WebSocketConnection actor (Fuera de scope)
+3. [-] Crear AsyncStream para recibir mensajes (Fuera de scope)
+4. [-] Implementar reconexión automática con backoff (Fuera de scope)
+5. [-] Agregar soporte para ping/pong heartbeat (Fuera de scope)
+6. [-] Implementar send message con diferentes tipos (Fuera de scope)
+7. [-] Integrar con interceptors para auth headers (Fuera de scope)
+8. [-] Documentar uso y diferencias vs long polling (Fuera de scope)
 
 ## Acceptance Criteria
-- [ ] Conexión WebSocket funciona end-to-end
-- [ ] Mensajes se reciben via AsyncStream
-- [ ] Reconexión automática funciona
-- [ ] Auth headers se envían en handshake
-- [ ] Tests cubren connect, message, disconnect
+- [-] Conexión WebSocket funciona end-to-end
+- [-] Mensajes se reciben via AsyncStream
+- [-] Reconexión automática funciona
+- [-] Auth headers se envían en handshake
+- [-] Tests cubren connect, message, disconnect
 
 ## Notes
 - URLSessionWebSocketTask disponible desde iOS 13

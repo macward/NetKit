@@ -1,0 +1,38 @@
+# Task: Add PII Sanitization to Metrics System
+
+Status: pending
+
+## Objective
+Add built-in sanitization for personally identifiable information (PII) in metrics collection to prevent accidental logging of sensitive data.
+
+## Context
+- Related files: `Sources/NetKit/Metrics/MetricsCollector.swift`, `Sources/NetKit/Metrics/ConsoleMetricsCollector.swift`
+- Dependencies: None
+- Severity: **HIGH** - Privacy/compliance risk
+
+## Problem
+Metrics currently capture full endpoint paths which may contain PII:
+- `/api/users/123` exposes user IDs
+- `/api/search?q=sensitive` exposes search queries
+- Full NetworkError may contain response bodies with PII
+
+## Steps
+1. [ ] Create `MetricsSanitizer` protocol with path and error sanitization methods
+2. [ ] Implement default sanitizer that redacts common PII patterns (IDs, emails, tokens)
+3. [ ] Add configurable path patterns for redaction (e.g., `/users/{id}`)
+4. [ ] Add sanitizer parameter to `MetricsCollector` protocol or implementations
+5. [ ] Update `ConsoleMetricsCollector` to use sanitizer
+6. [ ] Add documentation with privacy best practices
+7. [ ] Add tests for sanitization behavior
+
+## Acceptance Criteria
+- [ ] Default sanitizer redacts numeric IDs in paths
+- [ ] Query parameters are optionally redacted
+- [ ] Error messages don't expose response body content
+- [ ] Sanitization is configurable (can be disabled for internal systems)
+- [ ] Documentation explains privacy implications
+
+## Notes
+- Reference existing `SanitizationConfig` from LoggingInterceptor for patterns
+- Consider GDPR/privacy regulation requirements
+- Balance between useful metrics and privacy

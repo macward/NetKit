@@ -1,0 +1,33 @@
+# Task: Add Maximum Delay Cap to RetryPolicy
+
+Status: done
+
+## Objective
+Prevent exponential backoff from producing unreasonably long delays (currently unbounded - attempt 30 = 34 years) by adding a configurable maximum delay cap.
+
+## Context
+- Related files: `Sources/NetKit/Retry/RetryPolicy.swift`
+- Dependencies: None
+- Severity: **CRITICAL** - Can cause requests to hang indefinitely
+
+## Problem
+The exponential delay calculation `base * pow(multiplier, attempt)` has no upper bound. With default values (base=1.0, multiplier=2.0), attempt 30 produces 1,073,741,824 seconds (~34 years).
+
+## Steps
+1. [x] Add `maxDelay: TimeInterval` parameter to `DelayStrategy.exponential` case
+2. [x] Provide sensible default (e.g., 60 seconds)
+3. [x] Apply `min(calculatedDelay, maxDelay)` in delay calculation
+4. [x] Update factory methods to accept and pass through maxDelay
+5. [x] Add tests for delay capping behavior
+6. [x] Update documentation with new parameter
+
+## Acceptance Criteria
+- [x] Exponential backoff never exceeds configured maxDelay
+- [x] Default maxDelay is reasonable (30-60 seconds)
+- [x] Existing API remains backward compatible
+- [x] All retry tests pass
+- [x] Documentation updated
+
+## Notes
+- Consider also adding maxDelay to other delay strategies for consistency
+- Jitter should be applied after capping to avoid exceeding max
