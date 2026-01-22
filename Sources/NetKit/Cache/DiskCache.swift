@@ -14,6 +14,10 @@ public actor DiskCache {
     private let indexFileURL: URL
     private let versionFileURL: URL
 
+    // MARK: - Index Writer (Serialized Writes with Coalescing)
+
+    private let indexWriter: IndexWriter
+
     // MARK: - Initialization
 
     /// Creates a disk cache with the specified configuration.
@@ -39,6 +43,12 @@ public actor DiskCache {
 
         // Load or create index
         self.index = DiskCacheIndex()
+
+        // Initialize the serialized index writer
+        self.indexWriter = IndexWriter(
+            indexURL: indexFileURL,
+            cacheDirectory: cacheDirectory
+        )
 
         // Setup will be called after init completes
     }
@@ -256,6 +266,21 @@ public actor DiskCache {
         index.totalSize
     }
 
+    /// Flushes any pending index writes to disk immediately.
+    /// Useful for ensuring data persistence before app termination or for testing.
+    ///
+    /// This method ensures the current index state is written by:
+    /// 1. Scheduling a synchronous write with the current index state
+    /// 2. Flushing any pending writes immediately
+    /// - Returns: True if a write was performed, false if no pending write.
+    @discardableResult
+    public func flushIndex() async -> Bool {
+        // First, schedule the current index state synchronously to ensure it's captured
+        await indexWriter.scheduleWriteAndWait(index: index)
+        // Then flush immediately to bypass coalescing delay
+        return await indexWriter.flush()
+    }
+
     // MARK: - Private Methods
 
     private func store(data: Data, for request: URLRequest, metadata: CacheMetadata) async -> Bool {
@@ -435,30 +460,9 @@ public actor DiskCache {
     }
 
     private func saveIndexAsync() {
-        // Capture the current index state by value to avoid race conditions
-        let indexSnapshot: DiskCacheIndex = index
-        let indexURL: URL = indexFileURL
-        let cacheDir: URL = cacheDirectory
-
-        Task.detached {
-            // Create a new FileManager instance for this task (FileManager.default is thread-safe for reads)
-            let fm: FileManager = FileManager()
-            do {
-                // Backup current index first
-                if fm.fileExists(atPath: indexURL.path) {
-                    let backupURL: URL = cacheDir.appendingPathComponent("index.backup.json")
-                    try? fm.removeItem(at: backupURL)
-                    try? fm.copyItem(at: indexURL, to: backupURL)
-                }
-
-                let encoder: JSONEncoder = JSONEncoder()
-                encoder.dateEncodingStrategy = .iso8601
-                let data: Data = try encoder.encode(indexSnapshot)
-                try data.write(to: indexURL, options: .atomic)
-            } catch {
-                // Log error in production, but don't throw
-            }
-        }
+        // Schedule a write with the serialized index writer.
+        // The writer coalesces rapid writes and ensures only the latest state is persisted.
+        indexWriter.scheduleWrite(index: index)
     }
 
     private func loadBackupIndex() throws -> DiskCacheIndex? {
@@ -494,4 +498,152 @@ public enum DiskCacheError: Error, Sendable {
 
     /// The entry size exceeds the maximum allowed.
     case entrySizeExceeded
+}
+
+// MARK: - Index Writer
+
+/// A serialized index writer that coalesces rapid writes to prevent race conditions.
+/// Uses an internal actor to serialize all write operations and coalesces multiple rapid
+/// write requests into a single disk write.
+///
+/// This class is `Sendable` and thread-safe. It can be called from any isolation domain
+/// (including the `DiskCache` actor) without synchronization concerns. All write operations
+/// are automatically serialized through the internal `IndexWriteCoordinator` actor.
+internal final class IndexWriter: Sendable {
+    private let coordinator: IndexWriteCoordinator
+
+    /// Creates an index writer for the specified URLs.
+    /// - Parameters:
+    ///   - indexURL: The URL where the index file should be written.
+    ///   - cacheDirectory: The cache directory for backup files.
+    ///   - coalesceInterval: Time to wait before writing (default 100ms for coalescing).
+    init(indexURL: URL, cacheDirectory: URL, coalesceInterval: TimeInterval = 0.1) {
+        self.coordinator = IndexWriteCoordinator(
+            indexURL: indexURL,
+            cacheDirectory: cacheDirectory,
+            coalesceInterval: coalesceInterval
+        )
+    }
+
+    /// Schedules an index write. Multiple rapid calls will be coalesced into a single write.
+    /// Only the most recent index state will be written to disk.
+    /// This method is safe to call from any context.
+    /// - Parameter index: The index to write.
+    func scheduleWrite(index: DiskCacheIndex) {
+        Task {
+            await coordinator.scheduleWrite(index: index)
+        }
+    }
+
+    /// Forces an immediate write of any pending index, bypassing coalescing.
+    /// Useful for testing and ensuring data is persisted before shutdown.
+    /// - Returns: True if a write was performed, false if no pending write.
+    @discardableResult
+    func flush() async -> Bool {
+        await coordinator.flush()
+    }
+
+    /// Schedules a write and waits for it to be registered in the coordinator.
+    /// Used when immediate flushing is needed after the write.
+    func scheduleWriteAndWait(index: DiskCacheIndex) async {
+        await coordinator.scheduleWrite(index: index)
+    }
+}
+
+/// Internal actor that coordinates serialized index writes with coalescing.
+private actor IndexWriteCoordinator {
+    private let indexURL: URL
+    private let cacheDirectory: URL
+    private var pendingIndex: DiskCacheIndex?
+    private var writeTask: Task<Void, Never>?
+    private let coalesceInterval: UInt64 // nanoseconds
+
+    init(indexURL: URL, cacheDirectory: URL, coalesceInterval: TimeInterval) {
+        self.indexURL = indexURL
+        self.cacheDirectory = cacheDirectory
+        self.coalesceInterval = UInt64(coalesceInterval * 1_000_000_000)
+    }
+
+    /// Schedules an index write with coalescing.
+    func scheduleWrite(index: DiskCacheIndex) {
+        // Always update the pending index to the latest state
+        pendingIndex = index
+
+        // If a write is already scheduled, it will pick up the latest pendingIndex
+        guard writeTask == nil else { return }
+
+        // Schedule a new write task with coalescing delay
+        writeTask = Task {
+            // Wait for coalesce interval to batch rapid updates
+            try? await Task.sleep(nanoseconds: self.coalesceInterval)
+
+            // Check if task was cancelled during sleep (e.g., via flush())
+            guard !Task.isCancelled else {
+                self.writeTask = nil
+                return
+            }
+
+            // Perform the write with the latest state
+            await self.performCoalescedWrite()
+        }
+    }
+
+    /// Performs the coalesced write, consuming the pending state.
+    private func performCoalescedWrite() {
+        guard let indexToWrite = pendingIndex else {
+            writeTask = nil
+            return
+        }
+
+        pendingIndex = nil
+        writeTask = nil
+
+        // Perform the actual I/O (this is synchronous but safe within the actor)
+        performWriteSync(index: indexToWrite)
+    }
+
+    /// Synchronous write operation.
+    private func performWriteSync(index: DiskCacheIndex) {
+        let fm: FileManager = FileManager()
+
+        do {
+            // Backup current index first
+            if fm.fileExists(atPath: indexURL.path) {
+                let backupURL: URL = cacheDirectory.appendingPathComponent("index.backup.json")
+                try? fm.removeItem(at: backupURL)
+                try? fm.copyItem(at: indexURL, to: backupURL)
+            }
+
+            let encoder: JSONEncoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data: Data = try encoder.encode(index)
+            try data.write(to: indexURL, options: .atomic)
+        } catch {
+            // Log error in production, but don't throw
+            // The backup mechanism allows recovery on next load
+        }
+    }
+
+    /// Forces an immediate write of any pending index, bypassing coalescing.
+    /// Waits for any in-flight write task to complete first.
+    @discardableResult
+    func flush() async -> Bool {
+        // Wait for any in-flight write task to complete
+        if let task = writeTask {
+            _ = await task.value
+        }
+
+        // After the task completes, check for any pending writes that arrived
+        // during the wait or after task completion but before we checked.
+        // This handles the race where scheduleWrite() is called while flush() waits.
+        guard let indexToWrite = pendingIndex else { return false }
+
+        // Cancel any newly scheduled task since we're writing immediately
+        writeTask?.cancel()
+        writeTask = nil
+        pendingIndex = nil
+
+        performWriteSync(index: indexToWrite)
+        return true
+    }
 }

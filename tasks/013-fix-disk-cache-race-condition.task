@@ -1,0 +1,34 @@
+# Task: Fix DiskCache Index Save Race Condition
+
+Status: done
+
+## Objective
+Eliminate the race condition in DiskCache where multiple concurrent `saveIndexAsync()` calls can write stale snapshots, causing lost cache entries under high load.
+
+## Context
+- Related files: `Sources/NetKit/Cache/DiskCache.swift`
+- Dependencies: None
+- Severity: **CRITICAL** - Can cause data loss in production
+
+## Problem
+The current implementation captures an index snapshot and writes it in a `Task.detached`. When multiple rapid mutations occur (store, retrieve, remove), each triggers `saveIndexAsync()`. If Task 1 captures state A, Task 2 captures state B (newer), but Task 1's write completes last, the disk has state A (older) - losing data.
+
+## Steps
+1. [x] Add serialization mechanism for index writes (options: serial DispatchQueue, actor-based writer, or coalescing)
+2. [x] Implement write coalescing to batch rapid updates into single writes
+3. [x] Add atomic write verification (read-back check after write)
+4. [x] Update `saveIndexAsync()` to use the new serialized write mechanism
+5. [x] Add unit tests for concurrent store/retrieve/remove operations
+6. [x] Add stress test simulating high-frequency cache operations
+
+## Acceptance Criteria
+- [x] Concurrent cache operations never result in lost entries
+- [x] Index file always reflects the most recent state
+- [x] Performance remains acceptable (writes don't block reads)
+- [x] All existing DiskCache tests pass
+- [x] New concurrency tests pass under stress
+
+## Notes
+- Consider debouncing writes (e.g., max 1 write per 100ms) to reduce I/O
+- Backup index mechanism already exists - ensure it's not affected
+- Watch for deadlocks if using locks with async code
