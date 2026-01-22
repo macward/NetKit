@@ -655,7 +655,7 @@ extension NetworkClient {
     ///   - file: The URL of the file to upload.
     ///   - endpoint: The endpoint to upload to.
     /// - Returns: An `UploadResult` containing progress stream and response task.
-    public func upload<E: Endpoint>(file: URL, to endpoint: E) -> UploadResult<E.Response> {
+    public func upload<E: Endpoint>(file: URL, to endpoint: E) async -> UploadResult<E.Response> {
         let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<E.Response, Error> = Task {
@@ -678,7 +678,7 @@ extension NetworkClient {
     ///   - formData: The multipart form data to upload.
     ///   - endpoint: The endpoint to upload to.
     /// - Returns: An `UploadResult` containing progress stream and response task.
-    public func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) -> UploadResult<E.Response> {
+    public func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) async -> UploadResult<E.Response> {
         let encodedFormData: EncodedMultipartFormData = EncodedMultipartFormData(from: formData)
         let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
@@ -707,7 +707,7 @@ extension NetworkClient {
     ///   - endpoint: The endpoint to download from.
     ///   - destination: The URL where the file should be saved.
     /// - Returns: A `DownloadResult` containing progress stream and response task.
-    public func download<E: Endpoint>(from endpoint: E, to destination: URL) -> DownloadResult {
+    public func download<E: Endpoint>(from endpoint: E, to destination: URL) async -> DownloadResult {
         let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<URL, Error> = Task {

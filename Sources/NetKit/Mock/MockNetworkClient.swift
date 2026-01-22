@@ -266,11 +266,11 @@ public actor MockNetworkClient: NetworkClientProtocol {
 
     // MARK: - Upload Methods
 
-    public nonisolated func upload<E: Endpoint>(file: URL, to endpoint: E) -> UploadResult<E.Response> {
+    public func upload<E: Endpoint>(file: URL, to endpoint: E) async -> UploadResult<E.Response> {
         let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<E.Response, Error> = Task {
-            try await performMockUpload(endpoint: endpoint, continuation: continuation)
+            try await self.performMockUpload(endpoint: endpoint, continuation: continuation)
         }
 
         return UploadResult(
@@ -279,11 +279,11 @@ public actor MockNetworkClient: NetworkClientProtocol {
         )
     }
 
-    public nonisolated func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) -> UploadResult<E.Response> {
+    public func upload<E: Endpoint>(formData: MultipartFormData, to endpoint: E) async -> UploadResult<E.Response> {
         let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<E.Response, Error> = Task {
-            try await performMockUpload(endpoint: endpoint, continuation: continuation)
+            try await self.performMockUpload(endpoint: endpoint, continuation: continuation)
         }
 
         return UploadResult(
@@ -342,11 +342,11 @@ public actor MockNetworkClient: NetworkClientProtocol {
 
     // MARK: - Download Methods
 
-    public nonisolated func download<E: Endpoint>(from endpoint: E, to destination: URL) -> DownloadResult {
+    public func download<E: Endpoint>(from endpoint: E, to destination: URL) async -> DownloadResult {
         let (stream, continuation) = AsyncStream<TransferProgress>.makeStream()
 
         let responseTask: Task<URL, Error> = Task {
-            try await performMockDownload(endpoint: endpoint, destination: destination, continuation: continuation)
+            try await self.performMockDownload(endpoint: endpoint, destination: destination, continuation: continuation)
         }
 
         return DownloadResult(
