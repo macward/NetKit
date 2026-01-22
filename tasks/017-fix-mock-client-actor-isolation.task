@@ -1,0 +1,33 @@
+# Task: Fix MockNetworkClient Actor Isolation Violation
+
+Status: pending
+
+## Objective
+Remove actor isolation violations in MockNetworkClient where `nonisolated` methods access mutable actor state through Tasks.
+
+## Context
+- Related files: `Sources/NetKit/Mock/MockNetworkClient.swift`
+- Dependencies: None
+- Severity: **HIGH** - Can cause data races in test code
+
+## Problem
+Upload/download methods at lines 269, 282, 345 are marked `nonisolated` but create Tasks that access isolated actor state (`stubs`, `callCounts`). This violates actor isolation guarantees.
+
+## Steps
+1. [ ] Remove `nonisolated` keyword from upload methods
+2. [ ] Remove `nonisolated` keyword from download methods
+3. [ ] Restructure return types if needed to work with actor isolation
+4. [ ] Verify all MockNetworkClient public API remains usable
+5. [ ] Run all tests that use MockNetworkClient
+6. [ ] Add test specifically checking concurrent mock access
+
+## Acceptance Criteria
+- [ ] No `nonisolated` methods that access actor state
+- [ ] All MockNetworkClient methods compile without warnings
+- [ ] Existing tests using MockNetworkClient pass
+- [ ] No data races detectable with Thread Sanitizer
+
+## Notes
+- May require restructuring how UploadResult/DownloadResult are created
+- Consider if MockNetworkClient needs to be an actor at all
+- Alternative: make it a class with explicit synchronization

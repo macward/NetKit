@@ -1,0 +1,34 @@
+# Task: Fix HybridCache Pattern Invalidation Asymmetry
+
+Status: pending
+
+## Objective
+Fix the asymmetric behavior where pattern invalidation evicts matching entries from disk but ALL entries from memory cache.
+
+## Context
+- Related files: `Sources/NetKit/Cache/HybridCache.swift`, `Sources/NetKit/Cache/ResponseCache.swift`
+- Dependencies: task 018 (LRU implementation may touch same files)
+- Severity: **MEDIUM** - Causes unnecessary cache misses
+
+## Problem
+`invalidateMatching(pattern:)` in HybridCache calls `diskCache.invalidateMatching(pattern:)` for disk but `memoryCache.invalidateAll()` for memory because ResponseCache doesn't support pattern-based invalidation.
+
+## Steps
+1. [ ] Add `invalidateMatching(pattern: String)` method to ResponseCache
+2. [ ] Implement key matching logic (URL path contains pattern)
+3. [ ] Update HybridCache to use pattern invalidation for both caches
+4. [ ] Add tests for pattern invalidation in ResponseCache
+5. [ ] Add tests verifying HybridCache invalidates symmetrically
+6. [ ] Verify performance is acceptable for large caches
+
+## Acceptance Criteria
+- [ ] ResponseCache supports pattern-based invalidation
+- [ ] HybridCache invalidates same entries in both L1 and L2
+- [ ] Unrelated cache entries are preserved
+- [ ] Pattern matching is consistent between memory and disk cache
+- [ ] All existing cache tests pass
+
+## Notes
+- Match the pattern logic used in DiskCache for consistency
+- Consider regex support vs simple string contains
+- Document the pattern matching behavior

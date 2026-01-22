@@ -1,0 +1,34 @@
+# Task: Implement True LRU Eviction in ResponseCache
+
+Status: pending
+
+## Objective
+Fix ResponseCache eviction to use actual least-recently-used semantics instead of current expiration-time-based eviction.
+
+## Context
+- Related files: `Sources/NetKit/Cache/ResponseCache.swift`
+- Dependencies: None
+- Severity: **HIGH** - Causes wrong items to be evicted
+
+## Problem
+`enforceMaxEntries()` evicts entries by expiration time, not by access time. This means frequently-used items with short TTL get evicted while rarely-used items with long TTL persist.
+
+## Steps
+1. [ ] Add `lastAccessedAt: Date` property to `CacheEntry` struct
+2. [ ] Update `store()` to set `lastAccessedAt` on creation
+3. [ ] Update `retrieve()` to update `lastAccessedAt` on access
+4. [ ] Modify `enforceMaxEntries()` to sort by `lastAccessedAt` (oldest first)
+5. [ ] Add tests verifying LRU behavior (access pattern affects eviction order)
+6. [ ] Performance test to ensure update doesn't add significant overhead
+
+## Acceptance Criteria
+- [ ] Recently accessed items are kept during eviction
+- [ ] Least recently accessed items are evicted first
+- [ ] Access time updates don't significantly impact performance
+- [ ] All existing cache tests pass
+- [ ] New LRU-specific tests pass
+
+## Notes
+- DiskCache already has `lastAccessedAt` - mirror that implementation
+- Consider if updating access time on every read is too expensive (could batch)
+- Ensure thread safety of access time updates (actor handles this)

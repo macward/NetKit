@@ -182,6 +182,114 @@ struct TokenRefreshCoordinatorTests {
         let count = await refreshCount.value
         #expect(count == 2)
     }
+
+    @Test("Cancelled waiter receives CancellationError")
+    func cancelledWaiterReceivesCancellationError() async throws {
+        let refreshStarted = Flag()
+        let results = ResultsCollector()
+
+        let coordinator = TokenRefreshCoordinator {
+            await refreshStarted.set(true)
+            // Simulate a long-running refresh
+            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+        }
+
+        // Start a task group where we launch the refresh and a waiter that will be cancelled
+        await withTaskGroup(of: Void.self) { group in
+            // Task 1: Start the refresh (will hold the lock)
+            group.addTask {
+                try? await coordinator.refreshIfNeeded()
+            }
+
+            // Wait for refresh to start
+            while await !refreshStarted.value {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            // Task 2: Another waiter that will be cancelled
+            let waiterTask = Task {
+                do {
+                    try await coordinator.refreshIfNeeded()
+                    await results.recordSuccess()
+                } catch is CancellationError {
+                    await results.recordFailure() // Use failure to track cancellation
+                } catch {
+                    // Other error
+                }
+            }
+
+            // Give waiter time to register
+            try? await Task.sleep(nanoseconds: 50_000_000)
+
+            // Cancel the waiter
+            waiterTask.cancel()
+
+            // Wait for the waiter task to complete
+            _ = await waiterTask.value
+        }
+
+        let failures = await results.failures
+        #expect(failures == 1, "Cancelled waiter should receive CancellationError")
+    }
+
+    @Test("Cancellation does not affect other waiters")
+    func cancellationDoesNotAffectOtherWaiters() async throws {
+        let refreshStarted = Flag()
+        let successes = Counter()
+        let cancellations = Counter()
+
+        let coordinator = TokenRefreshCoordinator {
+            await refreshStarted.set(true)
+            try await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            // Task 1: Start the refresh
+            group.addTask {
+                try? await coordinator.refreshIfNeeded()
+                await successes.increment()
+            }
+
+            // Wait for refresh to start
+            while await !refreshStarted.value {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            // Task 2: A waiter that will complete successfully
+            group.addTask {
+                do {
+                    try await coordinator.refreshIfNeeded()
+                    await successes.increment()
+                } catch {
+                    // Should not happen
+                }
+            }
+
+            // Task 3: A waiter that will be cancelled
+            let cancelledTask = Task {
+                do {
+                    try await coordinator.refreshIfNeeded()
+                } catch is CancellationError {
+                    await cancellations.increment()
+                } catch {
+                    // Other error
+                }
+            }
+
+            // Give waiters time to register
+            try? await Task.sleep(nanoseconds: 50_000_000)
+
+            // Cancel only one waiter
+            cancelledTask.cancel()
+            _ = await cancelledTask.value
+        }
+
+        let successCount = await successes.value
+        let cancelCount = await cancellations.value
+
+        #expect(successCount == 2, "Two tasks should complete successfully")
+        #expect(cancelCount == 1, "One task should be cancelled")
+    }
 }
 
 // MARK: - AuthInterceptor Coordinated Refresh Tests

@@ -1,0 +1,40 @@
+# Task: Add NetworkClient Integration Tests
+
+Status: pending
+
+## Objective
+Add comprehensive integration tests for NetworkClient that test the full request flow including cache revalidation, retry exhaustion, and interceptor chains.
+
+## Context
+- Related files: `Tests/NetKitTests/`, `Sources/NetKit/Core/NetworkClient.swift`
+- Dependencies: None
+- Severity: **MEDIUM** - Test coverage gap
+
+## Problem
+Current tests primarily use MockNetworkClient or MockURLProtocol. Missing tests for:
+- Real `NetworkClient.request()` → `execute()` flow
+- Cache hit → stale → revalidation → 304 response handling
+- Interceptor chain execution order
+- Retry exhaustion behavior
+- Deduplication cleanup on errors
+
+## Steps
+1. [ ] Create `NetworkClientIntegrationTests.swift` test file
+2. [ ] Add tests for cache revalidation flow (stale cache + 304 = cached data)
+3. [ ] Add tests for interceptor execution order verification
+4. [ ] Add tests for retry exhaustion (all retries fail)
+5. [ ] Add tests for deduplication with errors
+6. [ ] Add tests for concurrent request deduplication verification
+7. [ ] Use MockURLProtocol for controlled HTTP responses
+
+## Acceptance Criteria
+- [ ] Cache revalidation E2E test passes
+- [ ] Interceptor order test verifies A→B→C request, C→B→A response
+- [ ] Retry exhaustion test verifies all attempts made before failure
+- [ ] Deduplication test verifies single network call for concurrent identical requests
+- [ ] All new tests are stable and don't flake
+
+## Notes
+- Use `.serialized` trait for tests that share state
+- Consider adding test helpers for common setup patterns
+- Focus on testing behavior, not implementation details

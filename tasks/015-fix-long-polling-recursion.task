@@ -1,0 +1,34 @@
+# Task: Convert Long Polling from Recursion to Iteration
+
+Status: pending
+
+## Objective
+Replace recursive polling implementation with iterative loop to prevent stack overflow during long-running polling sessions (24h polling at 1s intervals = 86,400 recursive calls).
+
+## Context
+- Related files: `Sources/NetKit/LongPolling/LongPollingStream.swift`
+- Dependencies: None
+- Severity: **CRITICAL** - Can crash app during extended polling
+
+## Problem
+`continuePolling()` calls `await next()` recursively. Each call maintains a stack frame with captured references. Extended polling sessions can exhaust stack space.
+
+## Steps
+1. [ ] Refactor `AsyncIterator.next()` to use while loop instead of recursion
+2. [ ] Move `continuePolling()` logic inline or convert to non-recursive helper
+3. [ ] Ensure cancellation checks remain at appropriate points in the loop
+4. [ ] Verify memory profile doesn't grow over time
+5. [ ] Add long-duration polling test (simulated, not real-time)
+6. [ ] Verify all existing long polling tests pass
+
+## Acceptance Criteria
+- [ ] No recursive calls in polling implementation
+- [ ] Memory usage remains constant during extended polling
+- [ ] Cancellation still works correctly at all points
+- [ ] All existing LongPolling tests pass
+- [ ] New long-duration test validates stability
+
+## Notes
+- Swift async/await creates continuation objects - verify loop doesn't accumulate them
+- Consider adding optional max poll count for additional safety
+- Maintain same error handling behavior (consecutive error counting, etc.)

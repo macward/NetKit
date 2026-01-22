@@ -1,0 +1,33 @@
+# Task: Deprecate or Remove SSL Pinning Bypass Mode
+
+Status: pending
+
+## Objective
+Remove or restrict the `.allowWithWarning` failure action that allows bypassing certificate pinning, which violates security by design.
+
+## Context
+- Related files: `Sources/NetKit/Security/SecurityPolicy.swift`
+- Dependencies: None
+- Severity: **HIGH** - Security vulnerability by design
+
+## Problem
+`FailureAction.allowWithWarning` (lines 24-38) allows connections to proceed even when certificate pinning fails. While documented as "never use in production", the capability exists and relies on developer discipline.
+
+## Steps
+1. [ ] Mark `.allowWithWarning` as `@available(*, deprecated, message: "Security risk - remove before production")`
+2. [ ] Add compile-time warning when used outside DEBUG builds
+3. [ ] Consider wrapping in `#if DEBUG` to prevent release builds
+4. [ ] Update documentation to emphasize security implications
+5. [ ] Add unit test that verifies behavior in debug vs release
+6. [ ] Review all usages in codebase and tests
+
+## Acceptance Criteria
+- [ ] `.allowWithWarning` produces deprecation warning
+- [ ] Cannot be used in release builds (compile error or runtime assertion)
+- [ ] Documentation clearly states security implications
+- [ ] Existing tests still compile (may need updates)
+
+## Notes
+- Alternative: Remove entirely and force mock/test environments to use different approach
+- Consider adding `@_unavailable(release)` if Swift supports it
+- May break some consumer code - document migration path

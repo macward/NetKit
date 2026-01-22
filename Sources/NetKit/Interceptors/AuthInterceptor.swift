@@ -5,6 +5,18 @@ import Foundation
 /// When multiple concurrent requests receive 401 responses, this coordinator ensures that
 /// only one token refresh operation is performed. All subsequent 401 handlers wait for the
 /// ongoing refresh to complete and receive its result.
+///
+/// Example:
+/// ```swift
+/// let coordinator = TokenRefreshCoordinator {
+///     try await authService.refreshToken()
+/// }
+///
+/// let interceptor = AuthInterceptor(
+///     tokenProvider: { try await authService.getToken() },
+///     refreshCoordinator: coordinator
+/// )
+/// ```
 public actor TokenRefreshCoordinator {
     /// The closure that performs the actual token refresh.
     private let refreshHandler: @Sendable () async throws -> Void
@@ -12,8 +24,14 @@ public actor TokenRefreshCoordinator {
     /// Tracks whether a refresh is currently in progress.
     private var isRefreshing: Bool = false
 
+    /// Waiter entry with a unique identifier for cancellation support.
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
     /// Continuations waiting for the current refresh to complete.
-    private var waiters: [CheckedContinuation<Void, Error>] = []
+    private var waiters: [Waiter] = []
 
     /// Creates a new token refresh coordinator.
     /// - Parameter refreshHandler: The closure that performs the actual token refresh.
@@ -28,11 +46,17 @@ public actor TokenRefreshCoordinator {
     /// starts one and notifies all waiters when it completes.
     ///
     /// - Throws: Any error from the refresh handler, propagated to all waiters.
+    ///           Also throws `CancellationError` if the task is cancelled while waiting.
     public func refreshIfNeeded() async throws {
         if isRefreshing {
             // A refresh is already in progress, wait for it to complete
-            try await withCheckedThrowingContinuation { continuation in
-                waiters.append(continuation)
+            let waiterId = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    waiters.append(Waiter(id: waiterId, continuation: continuation))
+                }
+            } onCancel: {
+                Task { await self.cancelWaiter(id: waiterId) }
             }
             return
         }
@@ -42,22 +66,34 @@ public actor TokenRefreshCoordinator {
 
         do {
             try await refreshHandler()
-            // Notify all waiters of success
-            let currentWaiters = waiters
-            waiters = []
-            isRefreshing = false
-            for waiter in currentWaiters {
-                waiter.resume()
-            }
+            completeWaiters(with: .success(()))
         } catch {
-            // Notify all waiters of failure
-            let currentWaiters = waiters
-            waiters = []
-            isRefreshing = false
-            for waiter in currentWaiters {
-                waiter.resume(throwing: error)
-            }
+            completeWaiters(with: .failure(error))
             throw error
+        }
+    }
+
+    /// Cancels a waiter by its ID, resuming with CancellationError.
+    private func cancelWaiter(id: UUID) {
+        if let index = waiters.firstIndex(where: { $0.id == id }) {
+            let waiter = waiters.remove(at: index)
+            waiter.continuation.resume(throwing: CancellationError())
+        }
+    }
+
+    /// Completes all pending waiters with the given result.
+    private func completeWaiters(with result: Result<Void, Error>) {
+        let currentWaiters = waiters
+        waiters = []
+        isRefreshing = false
+
+        for waiter in currentWaiters {
+            switch result {
+            case .success:
+                waiter.continuation.resume()
+            case .failure(let error):
+                waiter.continuation.resume(throwing: error)
+            }
         }
     }
 }

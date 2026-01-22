@@ -28,6 +28,7 @@ Added `TokenRefreshCoordinator` actor to prevent multiple concurrent 401 respons
 
 ## Notes
 - The implementation uses Swift actors for clean, race-condition-free coordination
-- Uses `CheckedContinuation` to suspend concurrent requests waiting for refresh
+- Uses `CheckedContinuation` with `withTaskCancellationHandler` to properly handle task cancellation
+- Waiters that are cancelled receive `CancellationError` while other waiters continue to wait for refresh
 - Backward compatible: existing `onUnauthorized` pattern still works
 - No timeout added for refresh operations - the refresh handler itself should implement timeouts if needed
