@@ -1,0 +1,43 @@
+# Task: Add Token Refresh Coordination to AuthInterceptor
+
+Status: done
+
+## Objective
+Prevent multiple concurrent 401 responses from triggering multiple simultaneous token refresh operations, which can cause duplicate refresh requests and potential state corruption.
+
+## Context
+- Related files: `Sources/NetKit/Interceptors/AuthInterceptor.swift`
+- Dependencies: None
+- Severity: **CRITICAL** - Can cause auth state corruption and wasted API calls
+
+## Problem
+When multiple concurrent requests receive 401 responses, each independently calls `onUnauthorized()`. Without coordination, this triggers multiple simultaneous token refreshes.
+
+## Steps
+1. [x] Add internal coordination mechanism (actor or lock-based)
+2. [x] Implement "refresh once, share result" pattern for concurrent 401s
+3. [x] Add flag to track if refresh is in progress
+4. [x] Make subsequent 401 handlers wait for ongoing refresh to complete
+5. [x] Add tests for concurrent 401 scenarios
+6. [x] Document the coordination behavior
+
+## Acceptance Criteria
+- [x] Multiple concurrent 401s trigger only ONE refresh operation
+- [x] All waiting requests receive the refreshed token
+- [x] Refresh failures are properly propagated to all waiters
+- [x] No deadlocks under any circumstances
+- [x] Existing auth tests pass
+- [x] New concurrent 401 tests pass
+
+## Notes
+- Consider using an actor for clean coordination
+- Handle case where refresh fails - all waiters should receive error
+- Consider timeout for refresh operation to prevent indefinite waits
+
+## Implementation Summary
+Added `TokenRefreshCoordinator` actor that:
+- Uses `isRefreshing` flag to track if a refresh is in progress
+- Uses `waiters` array with `CheckedContinuation` to suspend concurrent requests
+- First request starts the refresh, subsequent requests wait for completion
+- On completion, all waiters are resumed with the same result (success or error)
+- After refresh completes, new 401s trigger new refresh operations (no stale state)
