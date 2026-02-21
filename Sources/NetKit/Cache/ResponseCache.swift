@@ -5,10 +5,13 @@ public actor ResponseCache {
     /// Default maximum entries when not specified. Set to prevent unbounded memory growth.
     public static let defaultMaxEntries: Int = 100
 
-    /// A cached entry with data, metadata, and expiration support.
+    /// A cached entry with data, metadata, and LRU tracking.
     private struct CacheEntry {
         let data: Data
         let metadata: CacheMetadata
+
+        /// When this entry was last accessed (for LRU eviction).
+        var lastAccessedAt: Date
 
         /// Expiration time derived from metadata for single source of truth.
         var expiresAt: Date {
@@ -22,6 +25,12 @@ public actor ResponseCache {
         /// Checks if stale content can be served within a window.
         func canServeStale(within window: TimeInterval) -> Bool {
             metadata.isStaleButRevalidatable(within: window)
+        }
+
+        init(data: Data, metadata: CacheMetadata, lastAccessedAt: Date = Date()) {
+            self.data = data
+            self.metadata = metadata
+            self.lastAccessedAt = lastAccessedAt
         }
     }
 
@@ -99,13 +108,17 @@ public actor ResponseCache {
     /// - Returns: A result indicating the cache state and data.
     public func retrieveWithMetadata(for request: URLRequest) -> CacheRetrievalResult {
         let key: String = cacheKey(for: request)
-        guard let entry = storage[key] else {
+        guard var entry = storage[key] else {
             return .miss
         }
 
         let staleWindow: TimeInterval = entry.metadata.cacheControl?.staleWhileRevalidate ?? 0
 
         if !entry.isExpired {
+            // Update last access time for LRU tracking
+            entry.lastAccessedAt = Date()
+            storage[key] = entry
+
             if entry.metadata.requiresRevalidation {
                 return .needsRevalidation(entry.data, entry.metadata)
             }
@@ -113,10 +126,16 @@ public actor ResponseCache {
         }
 
         if entry.canServeStale(within: staleWindow) {
+            // Update last access time even for stale data
+            entry.lastAccessedAt = Date()
+            storage[key] = entry
             return .stale(entry.data, entry.metadata)
         }
 
         if entry.metadata.etag != nil || entry.metadata.lastModified != nil {
+            // Update last access time for revalidation candidates
+            entry.lastAccessedAt = Date()
+            storage[key] = entry
             return .needsRevalidation(entry.data, entry.metadata)
         }
 
@@ -183,15 +202,21 @@ public actor ResponseCache {
         CacheKeyGenerator.cacheKey(for: request)
     }
 
-    /// Enforces the maximum entries limit by removing oldest entries.
+    /// Enforces the maximum entries limit using LRU (Least Recently Used) eviction.
+    ///
+    /// First prunes expired entries, then evicts the least recently accessed
+    /// entries until the cache is within the limit. This ensures hot entries
+    /// are kept even if they have shorter TTLs.
     private func enforceMaxEntries() {
         guard let max = maxEntries, storage.count > max else { return }
 
+        // First, remove expired entries (they're definitely not needed)
         pruneExpired()
 
+        // If still over limit, evict least recently used entries
         while storage.count > max {
-            if let oldestKey = storage.min(by: { $0.value.expiresAt < $1.value.expiresAt })?.key {
-                storage.removeValue(forKey: oldestKey)
+            if let lruKey = storage.min(by: { $0.value.lastAccessedAt < $1.value.lastAccessedAt })?.key {
+                storage.removeValue(forKey: lruKey)
             } else {
                 break
             }

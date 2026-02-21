@@ -386,6 +386,106 @@ struct ResponseCacheTests {
         let result = await cache.retrieve(for: request)
         #expect(result == nil)
     }
+
+    @Test("LRU eviction removes least recently used entries")
+    func lruEviction() async throws {
+        // Cache with max 3 entries
+        let cache: ResponseCache = ResponseCache(maxEntries: 3)
+
+        let request1: URLRequest = URLRequest(url: URL(string: "https://api.example.com/1")!)
+        let request2: URLRequest = URLRequest(url: URL(string: "https://api.example.com/2")!)
+        let request3: URLRequest = URLRequest(url: URL(string: "https://api.example.com/3")!)
+        let request4: URLRequest = URLRequest(url: URL(string: "https://api.example.com/4")!)
+
+        // Store 3 entries
+        await cache.store(data: Data("one".utf8), for: request1, ttl: 3600)
+        try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+        await cache.store(data: Data("two".utf8), for: request2, ttl: 3600)
+        try await Task.sleep(nanoseconds: 10_000_000)
+        await cache.store(data: Data("three".utf8), for: request3, ttl: 3600)
+
+        // Access entry 1 to make it recently used
+        _ = await cache.retrieve(for: request1)
+
+        // Store a 4th entry - should evict entry 2 (least recently used)
+        await cache.store(data: Data("four".utf8), for: request4, ttl: 3600)
+
+        // Entry 1 should still exist (was recently accessed)
+        let result1 = await cache.retrieve(for: request1)
+        #expect(result1 != nil)
+
+        // Entry 2 should be evicted (least recently used)
+        let result2 = await cache.retrieve(for: request2)
+        #expect(result2 == nil)
+
+        // Entry 3 should still exist
+        let result3 = await cache.retrieve(for: request3)
+        #expect(result3 != nil)
+
+        // Entry 4 should exist (just added)
+        let result4 = await cache.retrieve(for: request4)
+        #expect(result4 != nil)
+    }
+
+    @Test("Access updates last accessed time for LRU")
+    func accessUpdatesLastAccessedTime() async throws {
+        let cache: ResponseCache = ResponseCache(maxEntries: 2)
+
+        let request1: URLRequest = URLRequest(url: URL(string: "https://api.example.com/1")!)
+        let request2: URLRequest = URLRequest(url: URL(string: "https://api.example.com/2")!)
+        let request3: URLRequest = URLRequest(url: URL(string: "https://api.example.com/3")!)
+
+        // Store 2 entries
+        await cache.store(data: Data("one".utf8), for: request1, ttl: 3600)
+        try await Task.sleep(nanoseconds: 10_000_000)
+        await cache.store(data: Data("two".utf8), for: request2, ttl: 3600)
+
+        // Access entry 1 multiple times to make it "hot"
+        _ = await cache.retrieve(for: request1)
+        try await Task.sleep(nanoseconds: 10_000_000)
+        _ = await cache.retrieve(for: request1)
+
+        // Store a 3rd entry - should evict entry 2 (less recently used than 1)
+        await cache.store(data: Data("three".utf8), for: request3, ttl: 3600)
+
+        // Entry 1 should survive (frequently accessed)
+        let result1 = await cache.retrieve(for: request1)
+        #expect(result1 != nil)
+
+        // Entry 2 should be evicted
+        let result2 = await cache.retrieve(for: request2)
+        #expect(result2 == nil)
+    }
+
+    @Test("LRU keeps hot entries even with short TTL")
+    func lruKeepsHotEntriesWithShortTTL() async throws {
+        let cache: ResponseCache = ResponseCache(maxEntries: 2)
+
+        let shortTTLRequest: URLRequest = URLRequest(url: URL(string: "https://api.example.com/short")!)
+        let longTTLRequest: URLRequest = URLRequest(url: URL(string: "https://api.example.com/long")!)
+        let newRequest: URLRequest = URLRequest(url: URL(string: "https://api.example.com/new")!)
+
+        // Store entry with short TTL first (but NOT expired)
+        await cache.store(data: Data("short".utf8), for: shortTTLRequest, ttl: 60)
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        // Store entry with long TTL
+        await cache.store(data: Data("long".utf8), for: longTTLRequest, ttl: 3600)
+
+        // Access the short TTL entry to make it "hot"
+        _ = await cache.retrieve(for: shortTTLRequest)
+
+        // Store a 3rd entry - should evict longTTL (less recently accessed)
+        await cache.store(data: Data("new".utf8), for: newRequest, ttl: 3600)
+
+        // Short TTL entry should survive (recently accessed)
+        let shortResult = await cache.retrieve(for: shortTTLRequest)
+        #expect(shortResult != nil)
+
+        // Long TTL entry should be evicted (not recently accessed)
+        let longResult = await cache.retrieve(for: longTTLRequest)
+        #expect(longResult == nil)
+    }
 }
 
 // MARK: - Interceptor Tests
