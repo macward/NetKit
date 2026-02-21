@@ -40,9 +40,10 @@ public actor ResponseCache {
 
     /// Creates a response cache.
     /// - Parameters:
-    ///   - maxEntries: Optional maximum number of entries. When exceeded, oldest entries are removed.
+    ///   - maxEntries: Maximum number of entries. Defaults to `defaultMaxEntries` (100).
+    ///     When exceeded, least recently used entries are evicted.
     ///   - cachePolicy: The cache policy to use. Defaults to HTTPCachePolicy with no default TTL.
-    public init(maxEntries: Int? = nil, cachePolicy: CachePolicy = HTTPCachePolicy()) {
+    public init(maxEntries: Int? = defaultMaxEntries, cachePolicy: CachePolicy = HTTPCachePolicy()) {
         self.maxEntries = maxEntries
         self.cachePolicy = cachePolicy
     }
