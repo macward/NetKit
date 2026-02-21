@@ -17,6 +17,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     private let encoder: JSONEncoder
     private let requestTracker: InFlightRequestTracker = InFlightRequestTracker()
     private let metricsCollector: (any MetricsCollector)?
+    private let requestKeyStrategy: any RequestKeyStrategy
 
     /// Creates a network client.
     /// - Parameters:
@@ -28,6 +29,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     ///   - decoder: The JSON decoder for responses. Defaults to `JSONDecoder()`.
     ///   - encoder: The JSON encoder for request bodies. Defaults to `JSONEncoder()`.
     ///   - metricsCollector: Optional metrics collector for request telemetry.
+    ///   - requestKeyStrategy: Strategy for generating deduplication keys. Defaults to URL + method + body.
     public init(
         environment: NetworkEnvironment,
         interceptors: [any Interceptor] = [],
@@ -36,7 +38,8 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         session: URLSession = .shared,
         decoder: JSONDecoder = JSONDecoder(),
         encoder: JSONEncoder = JSONEncoder(),
-        metricsCollector: (any MetricsCollector)? = nil
+        metricsCollector: (any MetricsCollector)? = nil,
+        requestKeyStrategy: any RequestKeyStrategy = DefaultRequestKeyStrategy()
     ) {
         self.environment = environment
         self.interceptors = interceptors
@@ -46,6 +49,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
         self.decoder = decoder
         self.encoder = encoder
         self.metricsCollector = metricsCollector
+        self.requestKeyStrategy = requestKeyStrategy
     }
 
     /// Executes a request for the given endpoint.
@@ -118,7 +122,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
 
         // Check if we should deduplicate this request
         if shouldDeduplicate(endpoint: endpoint) {
-            let requestKey: RequestKey = RequestKey(from: urlRequest)
+            let requestKey: SendableRequestKey = requestKeyStrategy.key(for: urlRequest)
 
             // Capture immutable copies to avoid data races in detached task
             let finalRequest: URLRequest = urlRequest

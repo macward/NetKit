@@ -16,7 +16,7 @@ internal struct InFlightTaskResult: Sendable {
 /// The tracker stores `Task<Data, Error>` rather than typed responses because the generic
 /// response type varies by endpoint. Each caller decodes the shared data independently.
 internal actor InFlightRequestTracker {
-    private var inFlight: [RequestKey: Task<Data, Error>] = [:]
+    private var inFlight: [SendableRequestKey: Task<Data, Error>] = [:]
 
     /// Atomically gets an existing task or registers a new one for the given request key.
     ///
@@ -27,7 +27,7 @@ internal actor InFlightRequestTracker {
     ///   - key: The request key to look up.
     ///   - createTask: A closure that creates a new task if no existing task is found.
     /// - Returns: A result containing the task and whether it was newly created.
-    func getOrCreate(for key: RequestKey, createTask: () -> Task<Data, Error>) -> InFlightTaskResult {
+    func getOrCreate(for key: SendableRequestKey, createTask: () -> Task<Data, Error>) -> InFlightTaskResult {
         if let existing = inFlight[key] {
             return InFlightTaskResult(task: existing, wasCreated: false)
         }
@@ -39,7 +39,7 @@ internal actor InFlightRequestTracker {
     /// Returns an existing task for the given request key, if one is in flight.
     /// - Parameter key: The request key to look up.
     /// - Returns: The existing task if found, nil otherwise.
-    func existingTask(for key: RequestKey) -> Task<Data, Error>? {
+    func existingTask(for key: SendableRequestKey) -> Task<Data, Error>? {
         inFlight[key]
     }
 
@@ -48,14 +48,14 @@ internal actor InFlightRequestTracker {
     /// - Parameters:
     ///   - task: The task to register.
     ///   - key: The request key to associate with the task.
-    func register(_ task: Task<Data, Error>, for key: RequestKey) {
+    func register(_ task: Task<Data, Error>, for key: SendableRequestKey) {
         inFlight[key] = task
     }
 
     /// Removes the task associated with the given request key.
     /// Call this when the request completes (success or failure).
     /// - Parameter key: The request key to remove.
-    func remove(key: RequestKey) {
+    func remove(key: SendableRequestKey) {
         inFlight.removeValue(forKey: key)
     }
 }
