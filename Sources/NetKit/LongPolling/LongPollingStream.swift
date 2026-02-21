@@ -67,33 +67,64 @@ public struct LongPollingStream<E: LongPollingEndpoint>: AsyncSequence, Sendable
         }
 
         public mutating func next() async -> E.Response? {
-            guard shouldContinue else { return nil }
-
-            // Check for task cancellation
-            guard !Task.isCancelled else {
-                shouldContinue = false
-                return nil
-            }
-
-            do {
-                // Perform the poll request with extended timeout
-                let response = try await performPollRequest()
-
-                // Reset error counter on success
-                consecutiveErrors = 0
-
-                // Check if we should continue polling
-                if !endpoint.shouldContinuePolling(after: response) {
+            // Iterative polling loop - avoids stack accumulation from recursion
+            while shouldContinue {
+                // Check for task cancellation at start of each iteration
+                guard !Task.isCancelled else {
                     shouldContinue = false
+                    return nil
                 }
 
-                return response
+                do {
+                    // Perform the poll request with extended timeout
+                    let response: E.Response = try await performPollRequest()
 
-            } catch let error as NetworkError {
-                return await handleError(error)
-            } catch {
-                return await handleError(NetworkError.unknown(underlyingError: error))
+                    // Reset error counter on success
+                    consecutiveErrors = 0
+
+                    // Check if we should continue polling
+                    if !endpoint.shouldContinuePolling(after: response) {
+                        shouldContinue = false
+                    }
+
+                    return response
+
+                } catch let error as NetworkError {
+                    let delay: TimeInterval? = delayForError(error)
+
+                    // nil delay means fatal error - stop polling
+                    guard let retryDelay = delay else {
+                        shouldContinue = false
+                        return nil
+                    }
+
+                    // Wait before next iteration (if needed)
+                    if retryDelay > 0 {
+                        let sleepCancelled: Bool = await sleep(for: retryDelay)
+                        if sleepCancelled {
+                            return nil
+                        }
+                    }
+                    // Continue to next iteration of the while loop
+
+                } catch {
+                    let delay: TimeInterval? = delayForError(NetworkError.unknown(underlyingError: error))
+
+                    guard let retryDelay = delay else {
+                        shouldContinue = false
+                        return nil
+                    }
+
+                    if retryDelay > 0 {
+                        let sleepCancelled: Bool = await sleep(for: retryDelay)
+                        if sleepCancelled {
+                            return nil
+                        }
+                    }
+                }
             }
+
+            return nil
         }
 
         /// Performs a single poll request.
@@ -104,87 +135,78 @@ public struct LongPollingStream<E: LongPollingEndpoint>: AsyncSequence, Sendable
                 .send()
         }
 
-        /// Handles errors during polling.
-        private mutating func handleError(_ error: NetworkError) async -> E.Response? {
+        /// Determines the delay before retrying after an error.
+        /// Returns nil for fatal errors that should stop polling.
+        private mutating func delayForError(_ error: NetworkError) -> TimeInterval? {
             consecutiveErrors += 1
 
             // Check if we've exceeded max consecutive errors
             if let max = maxConsecutiveErrors, consecutiveErrors >= max {
-                shouldContinue = false
                 return nil
             }
 
-            // Check for task cancellation before sleeping
-            guard !Task.isCancelled else {
-                shouldContinue = false
-                return nil
-            }
+            // Note: Task cancellation is checked by the caller in the main loop
+            // before calling this method, so no need to check here.
 
             switch error.kind {
             case .timeout:
                 // Timeout is expected in long polling - reconnect immediately
-                return await continuePolling(delay: 0)
+                return 0
 
             case .noContent:
                 // 204 No Content - no new data, poll again after interval
-                return await continuePolling(delay: retryInterval)
+                return retryInterval
 
             case .noConnection:
                 // Wait longer before retrying on connection issues
-                return await continuePolling(delay: retryInterval * 2)
+                return retryInterval * 2
 
             case .serverError(let statusCode):
                 if statusCode == 408 {
                     // 408 Request Timeout - reconnect immediately
-                    return await continuePolling(delay: 0)
+                    return 0
                 } else {
                     // Server errors - wait and retry
-                    return await continuePolling(delay: retryInterval)
+                    return retryInterval
                 }
 
             case .badGateway, .serviceUnavailable, .gatewayTimeout:
                 // Server errors - wait and retry
-                return await continuePolling(delay: retryInterval)
+                return retryInterval
 
             case .rateLimited:
                 // Rate limited - wait longer before retry
-                return await continuePolling(delay: retryInterval * 3)
+                return retryInterval * 3
 
             case .unauthorized, .forbidden, .notFound:
                 // Client errors - stop polling
-                shouldContinue = false
                 return nil
 
             case .clientError:
                 // Other client errors - stop polling
-                shouldContinue = false
                 return nil
 
             case .invalidURL, .encodingFailed, .decodingFailed:
                 // Fatal errors - stop polling
-                shouldContinue = false
                 return nil
 
             case .unknown:
                 // Unknown errors - wait and retry
-                return await continuePolling(delay: retryInterval)
+                return retryInterval
             }
         }
 
-        /// Waits for the specified delay and then continues to the next poll.
-        private mutating func continuePolling(delay: TimeInterval) async -> E.Response? {
-            if delay > 0 {
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                } catch {
-                    // Task was cancelled during sleep
-                    shouldContinue = false
-                    return nil
-                }
+        /// Sleeps for the specified duration.
+        /// Returns true if sleep was cancelled, false otherwise.
+        private func sleep(for delay: TimeInterval) async -> Bool {
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                return false
+            } catch {
+                // Task was cancelled during sleep
+                // The caller will check Task.isCancelled and set shouldContinue appropriately
+                return true
             }
-
-            // Recursively call next() to continue the polling loop
-            return await next()
         }
     }
 }

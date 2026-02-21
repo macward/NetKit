@@ -2103,3 +2103,235 @@ struct LoggingInterceptorSanitizationTests {
         #expect(result == data)
     }
 }
+
+// MARK: - LongPollingStream Tests
+
+/// A mock URLProtocol for intercepting network requests in long polling tests.
+private final class LongPollingMockURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var responses: [Result<(HTTPURLResponse, Data), Error>] = []
+    nonisolated(unsafe) static var currentIndex: Int = 0
+    nonisolated(unsafe) static var lock = NSLock()
+
+    static func reset() {
+        lock.lock()
+        responses = []
+        currentIndex = 0
+        lock.unlock()
+    }
+
+    static func addResponse(statusCode: Int, data: Data) {
+        lock.lock()
+        let response: HTTPURLResponse = HTTPURLResponse(
+            url: URL(string: "https://api.example.com/messages/poll")!,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        responses.append(.success((response, data)))
+        lock.unlock()
+    }
+
+    static func addTimeout() {
+        lock.lock()
+        responses.append(.failure(URLError(.timedOut)))
+        lock.unlock()
+    }
+
+    override static func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        LongPollingMockURLProtocol.lock.lock()
+        let index: Int = LongPollingMockURLProtocol.currentIndex
+
+        guard index < LongPollingMockURLProtocol.responses.count else {
+            LongPollingMockURLProtocol.lock.unlock()
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        // Access response while still holding the lock for thread safety
+        let result: Result<(HTTPURLResponse, Data), Error> = LongPollingMockURLProtocol.responses[index]
+        LongPollingMockURLProtocol.currentIndex += 1
+        LongPollingMockURLProtocol.lock.unlock()
+
+        switch result {
+        case .success(let (response, data)):
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        case .failure(let error):
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private struct LongPollingTestEnvironment: NetworkEnvironment {
+    var baseURL: URL = URL(string: "https://api.example.com")!
+    var defaultHeaders: [String: String] = [:]
+    var timeout: TimeInterval = 1
+}
+
+@Suite("LongPollingStream Tests", .serialized)
+struct LongPollingStreamTests {
+    private func createMockSession() -> URLSession {
+        let config: URLSessionConfiguration = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [LongPollingMockURLProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    private func createClient() -> NetworkClient {
+        NetworkClient(
+            environment: LongPollingTestEnvironment(),
+            session: createMockSession()
+        )
+    }
+
+    @Test("Stream yields multiple responses without stack overflow")
+    func streamIterativePolling() async throws {
+        LongPollingMockURLProtocol.reset()
+        let iterationCount: Int = 50
+
+        // Add many successful responses
+        for index in 0..<iterationCount {
+            let json: String = #"[{"id":"\#(index)","content":"Message \#(index)"}]"#
+            LongPollingMockURLProtocol.addResponse(statusCode: 200, data: json.data(using: .utf8)!)
+        }
+
+        let client: NetworkClient = createClient()
+        let endpoint: MessagesPollingEndpoint = MessagesPollingEndpoint()
+        var receivedCount: Int = 0
+
+        for await messages in client.poll(endpoint).prefix(iterationCount) {
+            receivedCount += 1
+            #expect(messages.count == 1)
+        }
+
+        #expect(receivedCount == iterationCount)
+    }
+
+    @Test("Stream handles cancellation during iteration")
+    func streamCancellation() async throws {
+        LongPollingMockURLProtocol.reset()
+
+        // Add enough responses
+        for index in 0..<20 {
+            let json: String = #"[{"id":"\#(index)","content":"Message \#(index)"}]"#
+            LongPollingMockURLProtocol.addResponse(statusCode: 200, data: json.data(using: .utf8)!)
+        }
+
+        let client: NetworkClient = createClient()
+        let endpoint: MessagesPollingEndpoint = MessagesPollingEndpoint()
+        var receivedCount: Int = 0
+
+        for await _ in client.poll(endpoint) {
+            receivedCount += 1
+            if receivedCount >= 5 {
+                break
+            }
+        }
+
+        #expect(receivedCount == 5)
+    }
+
+    @Test("Stream recovers from timeouts without recursion")
+    func streamTimeoutRecovery() async throws {
+        LongPollingMockURLProtocol.reset()
+
+        // Success, timeout, timeout, success, timeout, success
+        LongPollingMockURLProtocol.addResponse(
+            statusCode: 200,
+            data: #"[{"id":"1","content":"First"}]"#.data(using: .utf8)!
+        )
+        LongPollingMockURLProtocol.addTimeout()
+        LongPollingMockURLProtocol.addTimeout()
+        LongPollingMockURLProtocol.addResponse(
+            statusCode: 200,
+            data: #"[{"id":"2","content":"After timeouts"}]"#.data(using: .utf8)!
+        )
+        LongPollingMockURLProtocol.addTimeout()
+        LongPollingMockURLProtocol.addResponse(
+            statusCode: 200,
+            data: #"[{"id":"3","content":"Final"}]"#.data(using: .utf8)!
+        )
+
+        let config: LongPollingConfiguration = LongPollingConfiguration(
+            timeout: 1,
+            retryInterval: 0.01,
+            maxConsecutiveErrors: 10
+        )
+
+        let client: NetworkClient = createClient()
+        let endpoint: MessagesPollingEndpoint = MessagesPollingEndpoint()
+        var messages: [Message] = []
+
+        for await batch in client.poll(endpoint, configuration: config).prefix(3) {
+            messages.append(contentsOf: batch)
+        }
+
+        #expect(messages.count == 3)
+        #expect(messages[0].content == "First")
+        #expect(messages[1].content == "After timeouts")
+        #expect(messages[2].content == "Final")
+    }
+
+    @Test("Stream stops on fatal errors")
+    func streamFatalError() async throws {
+        LongPollingMockURLProtocol.reset()
+
+        LongPollingMockURLProtocol.addResponse(
+            statusCode: 200,
+            data: #"[{"id":"1","content":"First"}]"#.data(using: .utf8)!
+        )
+        LongPollingMockURLProtocol.addResponse(
+            statusCode: 401,
+            data: #"{"error":"Unauthorized"}"#.data(using: .utf8)!
+        )
+
+        let client: NetworkClient = createClient()
+        let endpoint: MessagesPollingEndpoint = MessagesPollingEndpoint()
+        var messages: [Message] = []
+
+        for await batch in client.poll(endpoint) {
+            messages.append(contentsOf: batch)
+        }
+
+        // Should only have received one message before fatal error stopped polling
+        #expect(messages.count == 1)
+        #expect(messages[0].content == "First")
+    }
+
+    @Test("Stream respects max consecutive errors")
+    func streamMaxConsecutiveErrors() async throws {
+        LongPollingMockURLProtocol.reset()
+
+        // All timeouts - should stop after maxConsecutiveErrors
+        for _ in 0..<10 {
+            LongPollingMockURLProtocol.addTimeout()
+        }
+
+        let config: LongPollingConfiguration = LongPollingConfiguration(
+            timeout: 1,
+            retryInterval: 0.001,
+            maxConsecutiveErrors: 5
+        )
+
+        let client: NetworkClient = createClient()
+        let endpoint: MessagesPollingEndpoint = MessagesPollingEndpoint()
+        var count: Int = 0
+
+        for await _ in client.poll(endpoint, configuration: config) {
+            count += 1
+        }
+
+        // Should not have received any messages (all errors)
+        #expect(count == 0)
+    }
+}
