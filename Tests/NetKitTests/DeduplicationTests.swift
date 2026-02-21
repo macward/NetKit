@@ -192,6 +192,81 @@ struct RequestKeyTests {
     }
 }
 
+// MARK: - RequestKeyStrategy Tests
+
+@Suite("RequestKeyStrategy Tests")
+struct RequestKeyStrategyTests {
+    @Test("DefaultRequestKeyStrategy produces consistent keys")
+    func defaultStrategyProducesConsistentKeys() {
+        let strategy = DefaultRequestKeyStrategy()
+
+        var request1 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request1.httpMethod = "GET"
+
+        var request2 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request2.httpMethod = "GET"
+
+        let key1 = strategy.key(for: request1)
+        let key2 = strategy.key(for: request2)
+
+        #expect(key1 == key2)
+    }
+
+    @Test("HeaderAwareRequestKeyStrategy includes specified headers")
+    func headerAwareStrategyIncludesHeaders() {
+        let strategy = HeaderAwareRequestKeyStrategy(headers: ["Accept-Language"])
+
+        var request1 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request1.httpMethod = "GET"
+        request1.setValue("en-US", forHTTPHeaderField: "Accept-Language")
+
+        var request2 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request2.httpMethod = "GET"
+        request2.setValue("es-ES", forHTTPHeaderField: "Accept-Language")
+
+        let key1 = strategy.key(for: request1)
+        let key2 = strategy.key(for: request2)
+
+        #expect(key1 != key2)
+    }
+
+    @Test("HeaderAwareRequestKeyStrategy produces same key for same headers")
+    func headerAwareStrategySameHeaders() {
+        let strategy = HeaderAwareRequestKeyStrategy(headers: ["Accept-Language"])
+
+        var request1 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request1.httpMethod = "GET"
+        request1.setValue("en-US", forHTTPHeaderField: "Accept-Language")
+
+        var request2 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request2.httpMethod = "GET"
+        request2.setValue("en-US", forHTTPHeaderField: "Accept-Language")
+
+        let key1 = strategy.key(for: request1)
+        let key2 = strategy.key(for: request2)
+
+        #expect(key1 == key2)
+    }
+
+    @Test("DefaultRequestKeyStrategy ignores headers")
+    func defaultStrategyIgnoresHeaders() {
+        let strategy = DefaultRequestKeyStrategy()
+
+        var request1 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request1.httpMethod = "GET"
+        request1.setValue("en-US", forHTTPHeaderField: "Accept-Language")
+
+        var request2 = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request2.httpMethod = "GET"
+        request2.setValue("es-ES", forHTTPHeaderField: "Accept-Language")
+
+        let key1 = strategy.key(for: request1)
+        let key2 = strategy.key(for: request2)
+
+        #expect(key1 == key2)
+    }
+}
+
 // MARK: - InFlightRequestTracker Tests
 
 @Suite("InFlightRequestTracker Tests")
@@ -201,7 +276,7 @@ struct InFlightRequestTrackerTests {
         let tracker = InFlightRequestTracker()
         var request = URLRequest(url: URL(string: "https://api.example.com/test")!)
         request.httpMethod = "GET"
-        let key = RequestKey(from: request)
+        let key = SendableRequestKey(RequestKey(from: request))
 
         let existingTask = await tracker.existingTask(for: key)
 
@@ -213,7 +288,7 @@ struct InFlightRequestTrackerTests {
         let tracker = InFlightRequestTracker()
         var request = URLRequest(url: URL(string: "https://api.example.com/test")!)
         request.httpMethod = "GET"
-        let key = RequestKey(from: request)
+        let key = SendableRequestKey(RequestKey(from: request))
 
         let task = Task<Data, Error> {
             "test".data(using: .utf8)!
@@ -230,7 +305,7 @@ struct InFlightRequestTrackerTests {
         let tracker = InFlightRequestTracker()
         var request = URLRequest(url: URL(string: "https://api.example.com/test")!)
         request.httpMethod = "GET"
-        let key = RequestKey(from: request)
+        let key = SendableRequestKey(RequestKey(from: request))
 
         let task = Task<Data, Error> {
             "test".data(using: .utf8)!
@@ -249,11 +324,11 @@ struct InFlightRequestTrackerTests {
 
         var request1 = URLRequest(url: URL(string: "https://api.example.com/test1")!)
         request1.httpMethod = "GET"
-        let key1 = RequestKey(from: request1)
+        let key1 = SendableRequestKey(RequestKey(from: request1))
 
         var request2 = URLRequest(url: URL(string: "https://api.example.com/test2")!)
         request2.httpMethod = "GET"
-        let key2 = RequestKey(from: request2)
+        let key2 = SendableRequestKey(RequestKey(from: request2))
 
         let task1 = Task<Data, Error> { "data1".data(using: .utf8)! }
         let task2 = Task<Data, Error> { "data2".data(using: .utf8)! }
@@ -461,7 +536,7 @@ struct DeduplicationThreadSafetyTests {
                 group.addTask {
                     var request = URLRequest(url: URL(string: "https://api.example.com/test/\(i)")!)
                     request.httpMethod = "GET"
-                    let key = RequestKey(from: request)
+                    let key = SendableRequestKey(RequestKey(from: request))
                     let task = Task<Data, Error> { "data\(i)".data(using: .utf8)! }
                     await tracker.register(task, for: key)
                 }
@@ -472,7 +547,7 @@ struct DeduplicationThreadSafetyTests {
                 group.addTask {
                     var request = URLRequest(url: URL(string: "https://api.example.com/test/\(i)")!)
                     request.httpMethod = "GET"
-                    let key = RequestKey(from: request)
+                    let key = SendableRequestKey(RequestKey(from: request))
                     _ = await tracker.existingTask(for: key)
                 }
             }
@@ -482,7 +557,7 @@ struct DeduplicationThreadSafetyTests {
                 group.addTask {
                     var request = URLRequest(url: URL(string: "https://api.example.com/test/\(i)")!)
                     request.httpMethod = "GET"
-                    let key = RequestKey(from: request)
+                    let key = SendableRequestKey(RequestKey(from: request))
                     await tracker.remove(key: key)
                 }
             }
