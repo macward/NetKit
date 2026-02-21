@@ -147,40 +147,44 @@ public final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @un
             return .failure(.pinningValidationFailed(host: host))
         }
 
-        let allPinnedItems: [Data] = policy.allPinnedItems
+        let allPinnedKeys: [PinnedKey] = policy.allPinnedKeys
         var extractionFailureCount: Int = 0
 
         for certificate in certificateChain {
-            let itemToCompare: Data?
-
             switch policy.mode {
             case .publicKey:
-                itemToCompare = extractPublicKey(from: certificate)
-                if itemToCompare == nil {
+                guard let publicKeyData = extractPublicKey(from: certificate) else {
                     extractionFailureCount += 1
                     logger.warning("Failed to extract public key from certificate for \(host)")
+                    continue
+                }
+
+                // Check against all pinned keys using PinnedKey matching
+                for pinnedKey in allPinnedKeys {
+                    if pinnedKey.matches(publicKeyData: publicKeyData) {
+                        let isPrimary: Bool = policy.pinnedKeys.contains(pinnedKey)
+                        if isPrimary {
+                            logger.debug("Certificate pinning succeeded for \(host) (primary pin)")
+                        } else {
+                            logger.info("Certificate pinning succeeded for \(host) (fallback pin)")
+                        }
+                        return .success
+                    }
                 }
 
             case .certificate:
-                itemToCompare = SecCertificateCopyData(certificate) as Data
-            }
-
-            guard let item = itemToCompare else {
-                continue
-            }
-
-            if allPinnedItems.contains(item) {
-                let isPrimary: Bool = policy.pinnedItems.contains(item)
-                if isPrimary {
-                    logger.debug("Certificate pinning succeeded for \(host) (primary pin)")
-                } else {
-                    logger.info("Certificate pinning succeeded for \(host) (fallback pin)")
+                let certificateData: Data = SecCertificateCopyData(certificate) as Data
+                for pinnedKey in allPinnedKeys {
+                    if pinnedKey.matches(certificateData: certificateData) {
+                        let isPrimary: Bool = policy.pinnedKeys.contains(pinnedKey)
+                        if isPrimary {
+                            logger.debug("Certificate pinning succeeded for \(host) (primary pin)")
+                        } else {
+                            logger.info("Certificate pinning succeeded for \(host) (fallback pin)")
+                        }
+                        return .success
+                    }
                 }
-                return .success
-            } else {
-                logger.debug(
-                    "No match for certificate from \(host). Checked \(allPinnedItems.count) pinned items"
-                )
             }
         }
 
