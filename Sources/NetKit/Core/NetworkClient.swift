@@ -129,11 +129,17 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             let finalCachedData: Data? = cachedData
             let finalCachedMetadata: CacheMetadata? = cachedMetadata
 
+            // Capture the caller's priority to preserve it in the detached task.
+            // This prevents priority inversion where a high-priority request might
+            // be handled at lower priority because the task was created detached.
+            let callerPriority: TaskPriority = Task.currentPriority
+
             // Atomically get existing task or create a new one to prevent race conditions.
             // Use Task.detached to isolate from caller's cancellation and task-local values.
             // The shared request should complete independently even if one caller cancels.
+            // Pass the caller's priority to avoid priority inversion.
             let result: InFlightTaskResult = await requestTracker.getOrCreate(for: requestKey) {
-                Task.detached { [self] in
+                Task.detached(priority: callerPriority) { [self] in
                     try await performDeduplicatedRequest(
                         urlRequest: finalRequest,
                         endpoint: endpoint,
