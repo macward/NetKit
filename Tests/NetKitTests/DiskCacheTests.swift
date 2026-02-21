@@ -182,6 +182,47 @@ struct CacheKeyGeneratorTests {
 
         #expect(filename1 != filename2)
     }
+
+    @Test("Different Authorization headers produce different cache keys")
+    func differentAuthTokensDifferentKeys() {
+        var request1: URLRequest = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request1.httpMethod = "GET"
+        request1.addValue("Bearer token-user-a", forHTTPHeaderField: "Authorization")
+
+        var request2: URLRequest = URLRequest(url: URL(string: "https://api.example.com/users")!)
+        request2.httpMethod = "GET"
+        request2.addValue("Bearer token-user-b", forHTTPHeaderField: "Authorization")
+
+        let key1: String = CacheKeyGenerator.cacheKey(for: request1)
+        let key2: String = CacheKeyGenerator.cacheKey(for: request2)
+
+        #expect(key1 != key2)
+        #expect(key1.contains("Authorization:Bearer token-user-a"))
+        #expect(key2.contains("Authorization:Bearer token-user-b"))
+    }
+
+    @Test("Cache key includes Authorization header when present")
+    func cacheKeyIncludesAuthHeader() {
+        var request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/data")!)
+        request.httpMethod = "GET"
+        request.addValue("Bearer my-token", forHTTPHeaderField: "Authorization")
+
+        let key: String = CacheKeyGenerator.cacheKey(for: request)
+
+        #expect(key.contains("Authorization:Bearer my-token"))
+    }
+
+    @Test("Requests without Authorization header work correctly")
+    func requestsWithoutAuthHeader() {
+        var request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/public")!)
+        request.httpMethod = "GET"
+
+        let key: String = CacheKeyGenerator.cacheKey(for: request)
+
+        #expect(!key.contains("Authorization"))
+        #expect(key.contains("GET"))
+        #expect(key.contains("https://api.example.com/public"))
+    }
 }
 
 // MARK: - DiskCache Tests
