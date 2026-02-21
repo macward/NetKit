@@ -173,13 +173,11 @@ public actor HybridCache {
         await diskCache.pruneOlderThan(maxAge)
     }
 
-    /// Invalidates entries matching a URL pattern.
+    /// Invalidates entries matching a URL pattern in both caches.
     /// - Parameter pattern: A string pattern to match against cache keys.
     public func invalidateMatching(pattern: String) async {
+        await memoryCache.invalidateMatching(pattern: pattern)
         await diskCache.invalidateMatching(pattern: pattern)
-        // Memory cache doesn't expose pattern-based invalidation,
-        // so we invalidate all memory to ensure consistency
-        await memoryCache.invalidateAll()
     }
 
     /// The current number of entries in memory cache.

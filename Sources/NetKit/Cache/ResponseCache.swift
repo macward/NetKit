@@ -185,6 +185,20 @@ public actor ResponseCache {
         storage.removeAll()
     }
 
+    /// Invalidates entries matching a URL pattern.
+    ///
+    /// Uses simple string containment matching against cache keys.
+    /// Cache keys include the HTTP method and URL, so patterns like
+    /// "/users" will match all cached requests containing that path.
+    ///
+    /// - Parameter pattern: A string pattern to match against cache keys.
+    public func invalidateMatching(pattern: String) {
+        let matchingKeys: [String] = storage.keys.filter { $0.contains(pattern) }
+        for key in matchingKeys {
+            storage.removeValue(forKey: key)
+        }
+    }
+
     /// Removes all expired entries from the cache.
     public func pruneExpired() {
         storage = storage.filter { !$0.value.isExpired }

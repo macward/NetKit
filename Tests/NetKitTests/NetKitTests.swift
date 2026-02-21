@@ -486,6 +486,70 @@ struct ResponseCacheTests {
         let longResult = await cache.retrieve(for: longTTLRequest)
         #expect(longResult == nil)
     }
+
+    @Test("Invalidate matching pattern removes matching entries")
+    func invalidateMatchingPattern() async {
+        let cache: ResponseCache = ResponseCache()
+
+        let usersRequest1: URLRequest = URLRequest(url: URL(string: "https://api.example.com/users/1")!)
+        let usersRequest2: URLRequest = URLRequest(url: URL(string: "https://api.example.com/users/2")!)
+        let postsRequest: URLRequest = URLRequest(url: URL(string: "https://api.example.com/posts/1")!)
+
+        await cache.store(data: Data("user1".utf8), for: usersRequest1, ttl: 3600)
+        await cache.store(data: Data("user2".utf8), for: usersRequest2, ttl: 3600)
+        await cache.store(data: Data("post1".utf8), for: postsRequest, ttl: 3600)
+
+        // Invalidate all /users entries
+        await cache.invalidateMatching(pattern: "/users")
+
+        // Users should be gone
+        let user1: Data? = await cache.retrieve(for: usersRequest1)
+        let user2: Data? = await cache.retrieve(for: usersRequest2)
+        #expect(user1 == nil)
+        #expect(user2 == nil)
+
+        // Posts should remain
+        let post1: Data? = await cache.retrieve(for: postsRequest)
+        #expect(post1 != nil)
+    }
+
+    @Test("Invalidate matching with no matches does nothing")
+    func invalidateMatchingNoMatches() async {
+        let cache: ResponseCache = ResponseCache()
+
+        let request: URLRequest = URLRequest(url: URL(string: "https://api.example.com/users/1")!)
+        await cache.store(data: Data("user1".utf8), for: request, ttl: 3600)
+
+        // Try to invalidate non-matching pattern
+        await cache.invalidateMatching(pattern: "/nonexistent")
+
+        // Entry should still exist
+        let result: Data? = await cache.retrieve(for: request)
+        #expect(result != nil)
+        #expect(await cache.count == 1)
+    }
+
+    @Test("Invalidate matching by domain")
+    func invalidateMatchingByDomain() async {
+        let cache: ResponseCache = ResponseCache()
+
+        let exampleRequest: URLRequest = URLRequest(url: URL(string: "https://api.example.com/users/1")!)
+        let otherRequest: URLRequest = URLRequest(url: URL(string: "https://api.other.com/users/1")!)
+
+        await cache.store(data: Data("example".utf8), for: exampleRequest, ttl: 3600)
+        await cache.store(data: Data("other".utf8), for: otherRequest, ttl: 3600)
+
+        // Invalidate entries for example.com domain
+        await cache.invalidateMatching(pattern: "example.com")
+
+        // Example.com entry should be gone
+        let exampleResult: Data? = await cache.retrieve(for: exampleRequest)
+        #expect(exampleResult == nil)
+
+        // Other domain should remain
+        let otherResult: Data? = await cache.retrieve(for: otherRequest)
+        #expect(otherResult != nil)
+    }
 }
 
 // MARK: - Interceptor Tests
