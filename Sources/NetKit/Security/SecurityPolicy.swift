@@ -155,17 +155,21 @@ public struct SecurityPolicy: Sendable, Equatable {
     ///   - fallbackItems: Backup items for certificate rotation.
     ///   - failureAction: Action to take on validation failure.
     ///   - validateCertificateChain: Whether to validate the certificate chain first.
+    ///   - pinnedKeys: Structured keys (for SPKI hash support). Defaults to wrapping pinnedItems.
+    ///   - fallbackKeys: Structured fallback keys. Defaults to wrapping fallbackItems.
     public init(
         mode: PinningMode,
         pinnedHosts: Set<String> = [],
         pinnedItems: [Data],
         fallbackItems: [Data] = [],
         failureAction: ValidationFailureAction = .reject,
-        validateCertificateChain: Bool = true
+        validateCertificateChain: Bool = true,
+        pinnedKeys: [PinnedKey]? = nil,
+        fallbackKeys: [PinnedKey]? = nil
     ) {
         precondition(
-            !pinnedItems.isEmpty,
-            "SecurityPolicy: pinnedItems cannot be empty. At least one pinned key or certificate is required."
+            !pinnedItems.isEmpty || !(pinnedKeys ?? []).isEmpty,
+            "SecurityPolicy: pinnedItems or pinnedKeys cannot be empty. At least one pinned key or certificate is required."
         )
         self.mode = mode
         self.pinnedHosts = pinnedHosts
@@ -173,6 +177,9 @@ public struct SecurityPolicy: Sendable, Equatable {
         self.fallbackItems = fallbackItems
         self.failureAction = failureAction
         self.validateCertificateChain = validateCertificateChain
+        // If pinnedKeys not provided, wrap pinnedItems as .der
+        self.pinnedKeys = pinnedKeys ?? pinnedItems.map { .der($0) }
+        self.fallbackKeys = fallbackKeys ?? fallbackItems.map { .der($0) }
     }
 
     // MARK: - Factory Methods
@@ -261,5 +268,56 @@ public struct SecurityPolicy: Sendable, Equatable {
     /// All items to validate against (primary + fallback).
     public var allPinnedItems: [Data] {
         pinnedItems + fallbackItems
+    }
+
+    // MARK: - PinnedKey Support
+
+    /// The pinned keys in structured format (for SPKI hash support).
+    public let pinnedKeys: [PinnedKey]
+
+    /// The fallback keys in structured format.
+    public let fallbackKeys: [PinnedKey]
+
+    /// All keys to validate against (primary + fallback).
+    public var allPinnedKeys: [PinnedKey] {
+        pinnedKeys + fallbackKeys
+    }
+
+    /// Creates a public key pinning policy with SPKI hash support.
+    ///
+    /// This is the recommended factory method when using SPKI hashes.
+    ///
+    /// - Parameters:
+    ///   - hosts: Hosts to apply pinning to. Empty means all hosts.
+    ///   - keys: The public keys to pin against (DER data or SPKI hashes).
+    ///   - fallback: Backup keys for rotation.
+    ///   - validateChain: Whether to validate the certificate chain first.
+    /// - Returns: A configured security policy.
+    public static func publicKeyPinning(
+        hosts: Set<String> = [],
+        keys: [PinnedKey],
+        fallback: [PinnedKey] = [],
+        validateChain: Bool = true
+    ) -> SecurityPolicy {
+        // Extract raw data for backwards compatibility
+        let primaryData: [Data] = keys.compactMap { key in
+            if case .der(let data) = key { return data }
+            return nil
+        }
+        let fallbackData: [Data] = fallback.compactMap { key in
+            if case .der(let data) = key { return data }
+            return nil
+        }
+
+        return SecurityPolicy(
+            mode: .publicKey,
+            pinnedHosts: hosts,
+            pinnedItems: primaryData.isEmpty ? [Data()] : primaryData,
+            fallbackItems: fallbackData,
+            failureAction: .reject,
+            validateCertificateChain: validateChain,
+            pinnedKeys: keys,
+            fallbackKeys: fallback
+        )
     }
 }

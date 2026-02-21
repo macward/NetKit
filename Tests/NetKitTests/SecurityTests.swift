@@ -169,6 +169,82 @@ struct SecurityPolicyTests {
     }
 }
 
+// MARK: - PinnedKey Tests
+
+@Suite("PinnedKey Tests")
+struct PinnedKeyTests {
+    @Test("DER key matches exact data")
+    func derKeyMatchesExactData() {
+        let keyData: Data = Data([0x01, 0x02, 0x03, 0x04])
+        let pinnedKey: PinnedKey = .der(keyData)
+
+        #expect(pinnedKey.matches(publicKeyData: keyData) == true)
+        #expect(pinnedKey.matches(publicKeyData: Data([0x01, 0x02])) == false)
+    }
+
+    @Test("SPKI SHA256 hash matches computed hash")
+    func spkiHashMatchesComputedHash() {
+        let keyData: Data = Data([0x01, 0x02, 0x03, 0x04])
+        let expectedHash: String = PinnedKey.computeSPKIHash(from: keyData)
+        let pinnedKey: PinnedKey = .spkiSHA256(expectedHash)
+
+        #expect(pinnedKey.matches(publicKeyData: keyData) == true)
+    }
+
+    @Test("SPKI SHA256 hash does not match different data")
+    func spkiHashDoesNotMatchDifferentData() {
+        let originalData: Data = Data([0x01, 0x02, 0x03, 0x04])
+        let differentData: Data = Data([0x05, 0x06, 0x07, 0x08])
+        let pinnedKey: PinnedKey = .spkiSHA256(PinnedKey.computeSPKIHash(from: originalData))
+
+        #expect(pinnedKey.matches(publicKeyData: differentData) == false)
+    }
+
+    @Test("computeSPKIHash produces consistent results")
+    func computeSPKIHashIsConsistent() {
+        let keyData: Data = Data([0x01, 0x02, 0x03, 0x04])
+        let hash1: String = PinnedKey.computeSPKIHash(from: keyData)
+        let hash2: String = PinnedKey.computeSPKIHash(from: keyData)
+
+        #expect(hash1 == hash2)
+    }
+
+    @Test("derBase64 creates key from valid base64")
+    func derBase64CreatesKeyFromValidBase64() {
+        let originalData: Data = Data([0x01, 0x02, 0x03, 0x04])
+        let base64: String = originalData.base64EncodedString()
+
+        let pinnedKey: PinnedKey? = PinnedKey.derBase64(base64)
+
+        #expect(pinnedKey != nil)
+        if case .der(let data) = pinnedKey {
+            #expect(data == originalData)
+        }
+    }
+
+    @Test("derBase64 returns nil for invalid base64")
+    func derBase64ReturnsNilForInvalidBase64() {
+        let pinnedKey: PinnedKey? = PinnedKey.derBase64("not-valid-base64!!!")
+
+        #expect(pinnedKey == nil)
+    }
+
+    @Test("SecurityPolicy with PinnedKey supports SPKI hash")
+    func securityPolicyWithSPKIHash() {
+        let keyData: Data = Data([0x01, 0x02, 0x03, 0x04])
+        let hash: String = PinnedKey.computeSPKIHash(from: keyData)
+
+        let policy: SecurityPolicy = SecurityPolicy.publicKeyPinning(
+            hosts: ["api.example.com"],
+            keys: [.spkiSHA256(hash)],
+            fallback: []
+        )
+
+        #expect(policy.pinnedKeys.count == 1)
+        #expect(policy.allPinnedKeys.count == 1)
+    }
+}
+
 // MARK: - SecurityError Tests
 
 @Suite("SecurityError Tests")
