@@ -119,7 +119,27 @@ struct DiskCacheIndex: Codable {
 // MARK: - Cache Key Generator
 
 /// Generates cache keys and file names.
+///
+/// Cache keys include the Authorization header to prevent cached responses
+/// from being shared between different authentication contexts. This ensures
+/// that requests with different auth tokens produce different cache keys,
+/// preventing potential security issues where User A's cached response
+/// could be served to User B.
 public enum CacheKeyGenerator {
+    /// Headers that affect response content and should be included in cache keys.
+    ///
+    /// - `Authorization`: Prevents sharing cached responses between different auth contexts.
+    ///   Critical for security when NetworkClient is shared or when auth tokens change.
+    /// - `Accept`: Response format may differ based on accepted content types.
+    /// - `Accept-Language`: Response content may be localized.
+    /// - `Accept-Encoding`: Included for completeness, though encoding is typically transparent.
+    private static let relevantHeaders: [String] = [
+        "Authorization",
+        "Accept",
+        "Accept-Language",
+        "Accept-Encoding"
+    ]
+
     /// Generates a cache key from a URLRequest.
     public static func cacheKey(for request: URLRequest) -> String {
         var components: [String] = []
@@ -130,7 +150,6 @@ public enum CacheKeyGenerator {
             components.append(url)
         }
 
-        let relevantHeaders: [String] = ["Accept", "Accept-Language", "Accept-Encoding"]
         for header in relevantHeaders {
             if let value = request.value(forHTTPHeaderField: header) {
                 components.append("\(header):\(value)")
