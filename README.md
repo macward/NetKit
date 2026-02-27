@@ -1,0 +1,170 @@
+# NetKit
+
+A simple, secure, and reusable networking layer for Swift.
+
+## Features
+
+- Type-safe API requests with `Endpoint` protocol
+- Upload & download with real-time progress tracking
+- Multipart form data support
+- Long polling for real-time updates
+- Automatic retry with exponential backoff
+- Response caching with HTTP header support
+- Request deduplication for concurrent identical requests
+- Request/response interceptors (auth, logging)
+- **SSL/TLS Certificate Pinning** for MITM protection
+- Sensitive data sanitization in logs
+- Full async/await support with Swift 6 concurrency
+
+## Requirements
+
+- iOS 18.0+ / macOS 15.0+
+- Swift 6.0+
+- No external dependencies
+
+## Installation
+
+Add NetKit to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/your-username/NetKit.git", from: "1.0.0")
+]
+```
+
+Or in Xcode: File → Add Package Dependencies → Enter the repository URL.
+
+## Quick Start
+
+```swift
+import NetKit
+
+// 1. Define your environment
+struct APIEnvironment: NetworkEnvironment {
+    var baseURL: URL { URL(string: "https://api.example.com")! }
+    var defaultHeaders: [String: String] { ["Content-Type": "application/json"] }
+    var timeout: TimeInterval { 30 }
+}
+
+// 2. Define your endpoint
+struct GetUserEndpoint: Endpoint {
+    let id: String
+    var path: String { "/users/\(id)" }
+    var method: HTTPMethod { .get }
+    typealias Response = User
+}
+
+// 3. Make requests
+let client = NetworkClient(environment: APIEnvironment())
+let user = try await client.request(GetUserEndpoint(id: "123"))
+```
+
+## Interceptors
+
+Interceptors are a core architectural pattern in NetKit that enables request/response modification through a clean, composable pipeline. This design is inspired by the **Chain of Responsibility** pattern and middleware systems found in frameworks like OkHttp (Android) and Alamofire.
+
+### Why Interceptors?
+
+Instead of cluttering the main networking logic with cross-cutting concerns (authentication, logging, metrics), interceptors provide:
+
+- **Separation of concerns**: Each interceptor handles one responsibility
+- **Composability**: Stack multiple interceptors in any order
+- **Testability**: Test interceptors in isolation
+- **Reusability**: Share interceptors across different clients
+
+### How They Work
+
+```
+Request Flow:
+┌─────────────────────────────────────────────────────────────────┐
+│  Your Code → Interceptor 1 → Interceptor 2 → ... → URLSession  │
+└─────────────────────────────────────────────────────────────────┘
+
+Response Flow:
+┌─────────────────────────────────────────────────────────────────┐
+│  URLSession → Interceptor N → ... → Interceptor 1 → Your Code  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Requests pass through interceptors in order; responses pass through in **reverse order**. This allows interceptors like logging to see both the final request and the original response.
+
+### Built-in Interceptors
+
+**AuthInterceptor** — Injects authentication tokens and handles 401 responses:
+
+```swift
+let auth = AuthInterceptor(
+    tokenProvider: { await tokenStore.accessToken },
+    onUnauthorized: { await tokenStore.refresh() }
+)
+```
+
+**LoggingInterceptor** — Logs requests/responses with automatic PII sanitization:
+
+```swift
+let logging = LoggingInterceptor(
+    level: .verbose,
+    sanitization: .default  // Redacts Authorization headers, passwords, etc.
+)
+```
+
+### Creating Custom Interceptors
+
+Implement the `Interceptor` protocol to create your own:
+
+```swift
+struct MetricsInterceptor: Interceptor {
+    func intercept(request: URLRequest) async throws -> URLRequest {
+        // Add custom headers, track timing, etc.
+        var modified = request
+        modified.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+        return modified
+    }
+
+    func intercept(response: HTTPURLResponse, data: Data) async throws -> Data {
+        // Log metrics, transform data, etc.
+        Analytics.track("api_response", properties: [
+            "status": response.statusCode,
+            "url": response.url?.path ?? ""
+        ])
+        return data
+    }
+}
+```
+
+### Using Interceptors
+
+Pass interceptors when creating the client. Order matters—first interceptor runs first on requests:
+
+```swift
+let client = NetworkClient(
+    environment: APIEnvironment(),
+    interceptors: [
+        LoggingInterceptor(level: .verbose),  // Logs first, sees final response last
+        AuthInterceptor(tokenProvider: { token }),  // Adds auth after logging
+        MetricsInterceptor()  // Runs last on request, first on response
+    ]
+)
+```
+
+## Documentation
+
+For detailed documentation, see the [docs](docs/) folder:
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/getting-started.md) | Installation, Quick Start, Core Concepts |
+| [Endpoints](docs/endpoints.md) | Common Use Cases, Fluent API |
+| [Authentication](docs/authentication.md) | Auth Interceptors, Token Refresh |
+| [Caching & Retry](docs/caching-retry.md) | Response Caching, Retry Policy, Deduplication |
+| [Logging](docs/logging.md) | Logging, Sensitive Data Sanitization |
+| [Long Polling](docs/long-polling.md) | Real-time Updates with Long Polling |
+| [Transfers](docs/transfers.md) | Upload & Download with Progress |
+| [Certificate Pinning](docs/certificate-pinning.md) | SSL/TLS Security, MITM Protection |
+| [Testing](docs/testing.md) | MockNetworkClient, Dependency Injection |
+| [Configuration](docs/configuration.md) | Environments, JSON Encoding/Decoding |
+| [Examples](docs/examples.md) | Full Example, Error Handling Patterns |
+
+## License
+
+MIT License
