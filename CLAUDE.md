@@ -1,18 +1,18 @@
 # CLAUDE.md
 
+vibe: netkit
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Search & Analysis Exclusions
 
-When searching or analyzing code, **IGNORE** these directories unless explicitly requested:
-- `tasks/` - Task planning files (not source code)
-- `docs/` - Documentation files (not source code)
+When searching or analyzing **code**, focus on `Sources/` and `Tests/`.
 
-Focus on `Sources/` and `Tests/` for code-related queries.
+- `docs/` - Not source code. Skip it for code-structure queries, but DO consult it as reference for API behavior, usage, and design (auth, caching, certificate pinning, transfers, testing).
 
 ## Project Overview
 
-NetKit is a Swift networking library for iOS 18+ and macOS 15+, built with Swift 6 and no external dependencies. It provides a type-safe, protocol-oriented approach to API communication with built-in support for authentication, caching, retries, and long polling.
+NetKit is a Swift networking library for iOS 18+ and macOS 15+, built with Swift 6.2 and no external dependencies. It provides a type-safe, protocol-oriented approach to API communication with built-in support for authentication, caching, retries, request deduplication, uploads/downloads with progress, certificate pinning, metrics, and long polling.
 
 ## Build & Test Commands
 
@@ -33,23 +33,26 @@ swiftlint
 
 ```
 Sources/NetKit/
-├── Core/           # NetworkClient, NetworkClientProtocol, Endpoint, RequestBuilder
-├── Models/         # HTTPMethod, NetworkError, NetworkEnvironment, EmptyResponse
-├── Interceptors/   # Interceptor protocol, AuthInterceptor, LoggingInterceptor
-├── Cache/          # ResponseCache
+├── Core/           # NetworkClient, NetworkClientProtocol, Endpoint, RequestBuilder, UploadResult/DownloadResult
+├── Models/         # HTTPMethod, NetworkError, NetworkEnvironment, EmptyResponse, DeduplicationPolicy
+├── Interceptors/   # Interceptor protocol, AuthInterceptor, TokenRefreshCoordinator, LoggingInterceptor
+├── Cache/          # ResponseCache (memory + disk), CachePolicy, Cache-Control/ETag parsing
 ├── Retry/          # RetryPolicy with delay strategies
 ├── LongPolling/    # LongPollingEndpoint, LongPollingStream, LongPollingConfiguration
+├── Progress/       # TransferProgress, TransferProgressStream, MultipartFormData
+├── Security/       # SecurityPolicy, PinningSessionFactory, CertificatePinningDelegate (cert pinning)
+├── Metrics/        # MetricsCollector, NetworkRequestMetrics
 ├── Mock/           # MockNetworkClient for testing
 └── Extensions/     # URLRequest extensions
 ```
 
 ### Core Flow
 
-`NetworkClient.request(Endpoint)` → Apply interceptors → Execute with retry logic → Cache GET responses → Decode response
+`NetworkClient.request(Endpoint)` → Apply interceptors → Check cache (GET) → Deduplicate concurrent identical requests → Execute with retry logic → Cache GET responses → Decode response
 
 ### Key Protocols
 
-- **Endpoint**: Defines API endpoints (path, method, headers, queryParameters, body, Response type)
+- **Endpoint**: Defines API endpoints (path, method, headers, queryParameters, body, Response type; plus cacheTTL, cachePolicy, deduplicationPolicy)
 - **LongPollingEndpoint**: Extends Endpoint with polling behavior (pollingTimeout, retryInterval, shouldContinuePolling)
 - **NetworkEnvironment**: Configuration (baseURL, defaultHeaders, timeout)
 - **Interceptor**: Request/response interception (auth, logging, custom)
