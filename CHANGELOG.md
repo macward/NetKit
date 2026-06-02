@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SwiftUI-native data layer (`@Resource`): a small observable query cache layered on
+  `NetworkClientProtocol`, in the spirit of TanStack Query. A view declares the resource it
+  needs and receives observable state (`phase` with `value`/`error`/`isLoading`), a cache
+  shared by `QueryKey`, query-level deduplication, and stale-while-revalidate. Inject the
+  store via `EnvironmentValues.queryClient` / `View.queryClient(_:)`. Public surface:
+  `@Resource(_:staleTime:)`, `QueryEntry` (+ `refetch()`), and `QueryClient`
+  (`entry(for:)`, `invalidate(_:)`, optimistic `setData(_:_:)`).
+- Data layer revalidation driven by lifecycle, never per render: observed, stale resources
+  revalidate on app foreground and when a view reappears past its `staleTime`, reusing the
+  per-key dedup and keeping the previous value visible (SWR).
+- Data layer garbage collection by observer count: an unobserved entry is collected after
+  `gcTime` (default 60s, configurable), rescued if re-observed within the window, and its
+  in-flight request is cancelled on collection.
+- Data layer auth isolation: the active session (via a `authContext` resolver) is folded
+  into `QueryKey`, so a value decoded under one session is never served to another after a
+  session switch — mirroring how the HTTP cache scopes bytes by `Authorization`.
+- Documentation: a new [Data Layer](docs/data-layer.md) guide covering `@Resource`,
+  `QueryClient` injection, invalidation, optimistic writes, freshness/revalidation and GC,
+  surfaced from the README docs index and feature list.
+
 - Standalone `NetKitMacros` package scaffold (separate `Package.swift`) for the
   upcoming declarative `@Endpoint` macros. The `swift-syntax` dependency lives only
   in this package's `.macro` implementation target (`NetKitMacrosImpl`), keeping the
