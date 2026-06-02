@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Server-Sent Events (SSE) streaming: type-safe, incremental consumption of `text/event-stream`
+  endpoints. Declare an `SSEEndpoint` (refines `Endpoint`, defaults `Response` to `EmptyResponse`)
+  whose `associatedtype Event: SSEDecodableEvent` owns discrimination via
+  `init(eventName:data:) throws` and a generic `isTerminal` flag. Consume with
+  `for try await event in client.stream(endpoint)`: the client opens `URLSession.bytes` with a
+  long timeout, forces `Accept: text/event-stream`, runs request interceptors (so `AuthInterceptor`
+  injects the Bearer), and bypasses cache and deduplication. `SSEStream<E>` delivers typed events
+  as they arrive, ends on a terminal event, surfaces decode failures as `SSEError.decodingFailed`
+  and mid-stream cuts as `SSEError.unexpectedDisconnect(lastEventID:)`, cancels the underlying
+  request when the consuming task is cancelled, and exposes raw `SSEEvent`s via `rawEvents`. Public
+  surface: `SSEEndpoint`, `SSEDecodableEvent`, `SSEEvent`, `SSEStream`, `SSEError`,
+  `SSEConfiguration`, and `NetworkClient.stream(_:)` / `NetworkClientProtocol`.
+- SSE dialect presets (transport modeling only, not SDKs): `OpenAIStreamEvent` (discriminates by
+  `data` content, `[DONE]` sentinel as a terminal case without JSON decode) and
+  `AnthropicStreamEvent` (discriminates by event name — `content_block_delta`, `message_stop`,
+  …— into distinct typed cases).
+- SSE testing support: `MockNetworkClient.stubStream(_:events:error:)` injects a pre-cooked
+  sequence of typed events (and an optional error) so consumers can test stream-consuming code
+  with no network.
 - SwiftUI-native data layer (`@Resource`): a small observable query cache layered on
   `NetworkClientProtocol`, in the spirit of TanStack Query. A view declares the resource it
   needs and receives observable state (`phase` with `value`/`error`/`isLoading`), a cache
