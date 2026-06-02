@@ -11,6 +11,15 @@ protocol AnyQueryEntry: AnyObject {
     /// observer-count garbage collection (evict when this reaches zero).
     var observerCount: Int { get set }
 
+    /// The freshness window remembered from the resource's `staleTime`, used by lifecycle
+    /// revalidation to decide whether this entry needs refreshing.
+    var staleTime: Duration { get set }
+
+    /// Whether the cached value is stale as of `now`: `true` if it was never loaded (or
+    /// explicitly marked stale), otherwise `true` once `staleTime` has elapsed since the
+    /// last successful load.
+    func isStale(asOf now: ContinuousClock.Instant) -> Bool
+
     /// Marks the cached value as stale so the next activation revalidates it.
     func markStale()
 
@@ -48,6 +57,10 @@ public final class QueryEntry<Value: Sendable>: AnyQueryEntry {
     @ObservationIgnored var updatedAt: ContinuousClock.Instant?
     @ObservationIgnored var inflight: Task<Void, Never>?
     @ObservationIgnored var observerCount: Int = 0
+
+    /// Freshness window for this resource, set on activation from the `@Resource`'s
+    /// `staleTime`. Drives stale-driven revalidation on lifecycle events.
+    @ObservationIgnored var staleTime: Duration = .zero
 
     /// The fetch closure wired by ``QueryClient`` when the entry is created. Internal
     /// mechanics; views drive refetching through the public ``refetch()`` instead.
@@ -97,6 +110,11 @@ public final class QueryEntry<Value: Sendable>: AnyQueryEntry {
     }
 
     // MARK: AnyQueryEntry
+
+    func isStale(asOf now: ContinuousClock.Instant) -> Bool {
+        guard let updatedAt else { return true }   // never loaded, or explicitly marked stale
+        return now - updatedAt >= staleTime
+    }
 
     func markStale() {
         updatedAt = nil

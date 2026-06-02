@@ -39,6 +39,11 @@ public final class QueryClient {
     /// there is no active session (the default), which disables auth scoping.
     @ObservationIgnored private let authContext: @MainActor () -> String?
 
+    /// Foreground-revalidation observer token, registered lazily by the SwiftUI layer and
+    /// torn down on deinit. Held here (rather than per-view) so there is a single
+    /// subscription for the whole store. `nil` until the first `@Resource` binds.
+    @ObservationIgnored internal var foregroundObserver: (any NSObjectProtocol)?
+
     public init(
         network: any NetworkClientProtocol,
         gcTime: Duration = .seconds(60),
@@ -47,6 +52,14 @@ public final class QueryClient {
         self.network = network
         self.gcTime = gcTime
         self.authContext = authContext
+    }
+
+    // `isolated deinit` runs on the MainActor so it can touch `foregroundObserver`. The
+    // store is created and released from the SwiftUI/main-actor side, so this holds.
+    isolated deinit {
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
     }
 
     // MARK: Key derivation
@@ -87,7 +100,30 @@ public final class QueryClient {
     internal func activateIfIdle<E: Endpoint>(_ endpoint: E, staleTime: Duration) {
         let entry: QueryEntry<E.Response> = entry(for: endpoint)
         guard entry.isIdle else { return }
+        // Fixed at first activation (first-writer-wins): if two views share a key with
+        // different staleTimes, revalidation timing stays deterministic rather than
+        // depending on render order.
+        entry.staleTime = staleTime
         performFetch(endpoint, into: entry)
+    }
+
+    // MARK: Lifecycle revalidation
+
+    /// Revalidates every *observed* entry whose `staleTime` has elapsed. Wired to app
+    /// foreground events by the SwiftUI layer (see `startForegroundRevalidationIfNeeded`).
+    ///
+    /// Unobserved entries are skipped — they revalidate lazily the next time a view
+    /// observes them. ``QueryEntry/triggerRefetch()`` dedups against any in-flight request,
+    /// so at most one revalidation per key is issued, and the current value stays visible
+    /// while it refreshes (stale-while-revalidate). Fresh entries are left untouched.
+    internal func revalidateStaleObservers() {
+        let now: ContinuousClock.Instant = clock.now
+        // Safe to mutate entries in this loop: `triggerRefetch` only mutates entry state
+        // in place (never adds/removes registry keys), and everything is on the MainActor.
+        for entry in entries.values where entry.observerCount > 0 {
+            guard entry.isStale(asOf: now) else { continue }
+            entry.triggerRefetch()
+        }
     }
 
     // MARK: Observer lifecycle (garbage collection)

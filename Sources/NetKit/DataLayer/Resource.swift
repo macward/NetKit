@@ -1,5 +1,11 @@
 #if canImport(SwiftUI)
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - Environment wiring
 
@@ -56,6 +62,10 @@ public struct Resource<E: Endpoint>: DynamicProperty {
     private let endpoint: E
     private let staleTime: Duration
 
+    /// - Parameter staleTime: How long a loaded value is considered fresh. The default
+    ///   `.zero` means the value is immediately stale, so it revalidates on every app
+    ///   foreground (and view reappear); pass a positive duration to opt into a freshness
+    ///   window that suppresses those revalidations until it elapses.
     public init(_ endpoint: E, staleTime: Duration = .zero) {
         self.endpoint = endpoint
         self.staleTime = staleTime
@@ -84,8 +94,46 @@ public struct Resource<E: Endpoint>: DynamicProperty {
         let token: ObserverToken = self.token
         MainActor.assumeIsolated {
             guard let client else { return }
+            client.startForegroundRevalidationIfNeeded()
             client.activateIfIdle(endpoint, staleTime: staleTime)
             token.bind(to: client.key(for: endpoint), client: client)
+        }
+    }
+}
+
+// MARK: - Foreground revalidation
+
+extension QueryClient {
+    /// Starts revalidating stale, observed resources when the app returns to the
+    /// foreground (R13, foreground vertex). Idempotent — safe to call on every observer
+    /// bind; only the first call registers the subscription, which lives for the store's
+    /// lifetime and is torn down in `deinit`.
+    ///
+    /// The notification fires on the main queue, where ``revalidateStaleObservers()`` is
+    /// invoked under `MainActor.assumeIsolated` — no `DispatchQueue` hop.
+    func startForegroundRevalidationIfNeeded() {
+        guard foregroundObserver == nil else { return }
+
+        let name: Notification.Name
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        name = UIApplication.didBecomeActiveNotification
+        #elseif os(macOS)
+        name = NSApplication.didBecomeActiveNotification
+        #else
+        return   // no foreground notion on this platform
+        #endif
+
+        // The notification is delivered on `OperationQueue.main`, which is not guaranteed
+        // to be the Swift concurrency main executor — so we hop with `Task { @MainActor }`
+        // (the idiomatic bridge) rather than `assumeIsolated`, which could trap.
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: name,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.revalidateStaleObservers()
+            }
         }
     }
 }
