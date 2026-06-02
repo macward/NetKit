@@ -28,6 +28,7 @@ A simple, secure, and reusable networking layer for Swift.
 |-------|-------------|
 | [Getting Started](getting-started.md) | Installation, Quick Start, Core Concepts |
 | [Endpoints](endpoints.md) | Common Use Cases, Fluent API |
+| [Endpoint Macros](macros.md) | Declarative `@GET`/`@POST` endpoints, before/after, opt-in setup |
 | [Authentication](authentication.md) | Auth Interceptors, Token Refresh |
 | [Caching & Retry](caching-retry.md) | Response Caching, Retry Policy, Deduplication |
 | [Logging](logging.md) | Logging, Sensitive Data Sanitization |

@@ -45,3 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generate (`path`/`method`/`queryParameters`/`body`) or any protocol-default member such
   as `cachePolicy`/`headers`, the macro skips generating it so the hand-written member is
   respected without a redeclaration conflict.
+- Documentation: a new [Endpoint Macros](docs/macros.md) guide with a before/after example
+  (manual `Endpoint` struct vs the `@GET`/`@POST` macro form), the annotation reference, and
+  how to opt into the separate `NetKitMacros` package — noting the manual model stays
+  first-class and the core `NetKit` package remains dependency-free. The macros are now also
+  surfaced from the README (Features, Installation, docs index) and the Getting Started guide.
