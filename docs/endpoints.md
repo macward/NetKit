@@ -1,5 +1,9 @@
 # Endpoints
 
+> **Prefer less boilerplate?** The optional [NetKitMacros](macros.md) package generates the
+> `Endpoint` conformance and its members from `@GET`/`@POST`/… annotations. The manual structs
+> below remain fully supported and dependency-free.
+
 ## Common Use Cases
 
 ### GET Request

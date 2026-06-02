@@ -14,6 +14,11 @@ dependencies: [
 
 Or in Xcode: File → Add Package Dependencies → Enter the repository URL.
 
+NetKit core has no external dependencies. If you want to declare endpoints declaratively with
+macros (`@GET`/`@POST`/…) instead of hand-written structs, add the optional **`NetKitMacros`**
+package as well — see [Endpoint Macros](macros.md) for the setup and a before/after example. The
+manual `Endpoint` model below stays fully supported and dependency-free.
+
 ## Quick Start
 
 ### 1. Define your Environment

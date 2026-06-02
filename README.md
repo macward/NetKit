@@ -15,6 +15,7 @@ A simple, secure, and reusable networking layer for Swift.
 - **SSL/TLS Certificate Pinning** for MITM protection
 - Sensitive data sanitization in logs
 - Full async/await support with Swift 6 concurrency
+- Declarative endpoint macros (`@GET`/`@POST`/…) via the optional `NetKitMacros` package
 
 ## Requirements
 
@@ -33,6 +34,10 @@ dependencies: [
 ```
 
 Or in Xcode: File → Add Package Dependencies → Enter the repository URL.
+
+The core package is dependency-free. To declare endpoints with macros instead of hand-written
+structs, also add the optional `NetKitMacros` package — see [Endpoint Macros](docs/macros.md).
+Consumers who stick with the manual `Endpoint` model pull in nothing extra.
 
 ## Quick Start
 
@@ -155,6 +160,7 @@ For detailed documentation, see the [docs](docs/) folder:
 |-------|-------------|
 | [Getting Started](docs/getting-started.md) | Installation, Quick Start, Core Concepts |
 | [Endpoints](docs/endpoints.md) | Common Use Cases, Fluent API |
+| [Endpoint Macros](docs/macros.md) | Declarative `@GET`/`@POST` endpoints, before/after, opt-in setup |
 | [Authentication](docs/authentication.md) | Auth Interceptors, Token Refresh |
 | [Caching & Retry](docs/caching-retry.md) | Response Caching, Retry Policy, Deduplication |
 | [Logging](docs/logging.md) | Logging, Sensitive Data Sanitization |
