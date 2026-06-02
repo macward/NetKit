@@ -238,9 +238,14 @@ struct TokenRefreshCoordinatorTests {
         let successes = Counter()
         let cancellations = Counter()
 
+        // Hold the refresh open until the cancelled waiter has actually been observed.
+        // This makes the outcome deterministic: the success path (completeWaiters) cannot
+        // resume the cancelled waiter before its cancellation is processed.
         let coordinator = TokenRefreshCoordinator {
             await refreshStarted.set(true)
-            try await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+            while await cancellations.value < 1 {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
         }
 
         await withTaskGroup(of: Void.self) { group in
@@ -250,9 +255,9 @@ struct TokenRefreshCoordinatorTests {
                 await successes.increment()
             }
 
-            // Wait for refresh to start
+            // Wait for the refresh to be in progress so the next two calls become waiters.
             while await !refreshStarted.value {
-                try? await Task.sleep(nanoseconds: 10_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000)
             }
 
             // Task 2: A waiter that will complete successfully
@@ -276,8 +281,11 @@ struct TokenRefreshCoordinatorTests {
                 }
             }
 
-            // Give waiters time to register
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            // Wait until both waiters are registered before cancelling, so cancellation
+            // deterministically targets a live waiter (no registration timing window).
+            while await coordinator.pendingWaiterCount < 2 {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
 
             // Cancel only one waiter
             cancelledTask.cancel()

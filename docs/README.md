@@ -11,6 +11,7 @@ A simple, secure, and reusable networking layer for Swift.
 - Automatic retry with exponential backoff
 - Response caching with HTTP header support
 - Request deduplication for concurrent identical requests
+- SwiftUI-native data layer (`@Resource`) with a shared, observable query cache
 - Request/response interceptors (auth, logging)
 - **SSL/TLS Certificate Pinning** for MITM protection
 - Sensitive data sanitization in logs
@@ -31,6 +32,7 @@ A simple, secure, and reusable networking layer for Swift.
 | [Endpoint Macros](macros.md) | Declarative `@GET`/`@POST` endpoints, before/after, opt-in setup |
 | [Authentication](authentication.md) | Auth Interceptors, Token Refresh |
 | [Caching & Retry](caching-retry.md) | Response Caching, Retry Policy, Deduplication |
+| [Data Layer](data-layer.md) | SwiftUI `@Resource`, QueryClient, invalidation, optimistic writes, GC |
 | [Logging](logging.md) | Logging, Sensitive Data Sanitization |
 | [Long Polling](long-polling.md) | Real-time Updates with Long Polling |
 | [Transfers](transfers.md) | Upload & Download with Progress |

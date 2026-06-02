@@ -33,6 +33,10 @@ public actor TokenRefreshCoordinator {
     /// Continuations waiting for the current refresh to complete.
     private var waiters: [Waiter] = []
 
+    /// Number of continuations currently waiting for the in-flight refresh. Internal
+    /// inspection hook for tests (surfaced via `@testable import`).
+    internal var pendingWaiterCount: Int { waiters.count }
+
     /// Creates a new token refresh coordinator.
     /// - Parameter refreshHandler: The closure that performs the actual token refresh.
     public init(refreshHandler: @escaping @Sendable () async throws -> Void) {
@@ -52,7 +56,14 @@ public actor TokenRefreshCoordinator {
             // A refresh is already in progress, wait for it to complete
             let waiterId = UUID()
             try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { continuation in
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    // If cancellation already arrived before we suspended, resolve now —
+                    // registering a waiter here would race the `onCancel` handler, which
+                    // may have already run (and found no waiter to cancel).
+                    guard !Task.isCancelled else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
                     waiters.append(Waiter(id: waiterId, continuation: continuation))
                 }
             } onCancel: {
