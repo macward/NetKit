@@ -37,16 +37,32 @@ import Foundation
 public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
     public typealias Element = E.Event
 
-    /// Produces a fresh line stream for each iterator. Each call must yield the
-    /// SSE payload split into lines (without trailing newlines), finishing when
-    /// the transport closes and finishing-with-error when it is cut mid-stream.
-    private let lineSource: @Sendable () -> AsyncThrowingStream<String, any Error>
+    /// The internal source backing this stream.
+    ///
+    /// Two modes are supported, sharing the same public surface:
+    /// - ``Source/lines`` drives the full bytes → parser → typed decode pipeline
+    ///   used by the real transport (task 004/005).
+    /// - ``Source/elements`` yields pre-built `E.Event` values directly, used by
+    ///   ``MockNetworkClient`` to inject deterministic sequences without a parser
+    ///   or any decoding (task 006).
+    private let source: Source
 
     /// Invoked exactly once when iteration finalizes for any reason (terminal
     /// event, error, cancellation, or normal end). Defaults to a no-op; the
     /// network factory passes `{ task.cancel() }` here so abandoning the
     /// `for await` cuts the underlying HTTP request.
     private let onCancel: @Sendable () -> Void
+
+    /// The backing source of an ``SSEStream``.
+    enum Source: Sendable {
+        /// A factory that produces a fresh line stream per iterator. Lines drive
+        /// the parser + discriminator pipeline.
+        case lines(@Sendable () -> AsyncThrowingStream<String, any Error>)
+
+        /// A factory that produces a fresh stream of pre-built typed events per
+        /// iterator. No parser or decoding is involved.
+        case elements(@Sendable () -> AsyncThrowingStream<E.Event, any Error>)
+    }
 
     /// Creates an SSE stream from an injected line source.
     ///
@@ -62,12 +78,40 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
         lineSource: @escaping @Sendable () -> AsyncThrowingStream<String, any Error>,
         onCancel: @escaping @Sendable () -> Void = {}
     ) {
-        self.lineSource = lineSource
+        self.source = .lines(lineSource)
+        self.onCancel = onCancel
+    }
+
+    /// Creates an SSE stream from an injected element source.
+    ///
+    /// In this "elements mode" the iterator pulls pre-built `E.Event` values
+    /// directly — no line parsing and no discriminator decoding. The stream ends
+    /// *cleanly* when the source finishes (no
+    /// ``SSEError/unexpectedDisconnect(lastEventID:)`` is synthesized; the source
+    /// owns terminal-ness), and rethrows if the source finishes with an error.
+    ///
+    /// This is the seam used by ``MockNetworkClient`` to inject deterministic
+    /// event sequences in tests. It performs no networking.
+    ///
+    /// - Parameters:
+    ///   - elements: A factory that returns a fresh event stream per iterator.
+    ///   - onCancel: A hook invoked once when iteration finalizes. Defaults to a
+    ///     no-op.
+    init(
+        elements: @escaping @Sendable () -> AsyncThrowingStream<E.Event, any Error>,
+        onCancel: @escaping @Sendable () -> Void = {}
+    ) {
+        self.source = .elements(elements)
         self.onCancel = onCancel
     }
 
     public func makeAsyncIterator() -> AsyncIterator {
-        AsyncIterator(lineSource: lineSource(), onCancel: onCancel)
+        switch source {
+        case .lines(let factory):
+            return AsyncIterator(lineSource: factory(), onCancel: onCancel)
+        case .elements(let factory):
+            return AsyncIterator(elementSource: factory(), onCancel: onCancel)
+        }
     }
 
     /// A view over the same transport that yields the raw ``SSEEvent`` values
@@ -79,6 +123,10 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
     /// semantics, or raise ``SSEError/unexpectedDisconnect(lastEventID:)`` on a
     /// bare end. Transport errors are still propagated.
     public var rawEvents: AsyncThrowingStream<SSEEvent, any Error> {
+        guard case .lines(let lineSource) = source else {
+            // Elements mode has no wire-level events to expose.
+            return AsyncThrowingStream { $0.finish() }
+        }
         let source: AsyncThrowingStream<String, any Error> = lineSource()
         let cancel: @Sendable () -> Void = onCancel
         return AsyncThrowingStream { continuation in
@@ -105,8 +153,17 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
 
     /// The async iterator that drives the bytes → parser → typed decode pipeline.
     public struct AsyncIterator: AsyncIteratorProtocol {
-        private var iterator: AsyncThrowingStream<String, any Error>.AsyncIterator
-        private var parser: SSELineParser
+        /// The active iteration mode. Line mode runs the parser + decode
+        /// pipeline; element mode pulls pre-built events directly.
+        private enum Mode {
+            case lines(
+                iterator: AsyncThrowingStream<String, any Error>.AsyncIterator,
+                parser: SSELineParser
+            )
+            case elements(iterator: AsyncThrowingStream<E.Event, any Error>.AsyncIterator)
+        }
+
+        private var mode: Mode
         private let onCancel: @Sendable () -> Void
 
         /// Whether a terminal event has already been delivered. Once `true`, a
@@ -121,12 +178,62 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
             lineSource: AsyncThrowingStream<String, any Error>,
             onCancel: @escaping @Sendable () -> Void
         ) {
-            self.iterator = lineSource.makeAsyncIterator()
-            self.parser = SSELineParser()
+            self.mode = .lines(iterator: lineSource.makeAsyncIterator(), parser: SSELineParser())
+            self.onCancel = onCancel
+        }
+
+        init(
+            elementSource: AsyncThrowingStream<E.Event, any Error>,
+            onCancel: @escaping @Sendable () -> Void
+        ) {
+            self.mode = .elements(iterator: elementSource.makeAsyncIterator())
             self.onCancel = onCancel
         }
 
         public mutating func next() async throws -> E.Event? {
+            switch mode {
+            case .lines:
+                return try await nextFromLines()
+            case .elements:
+                return try await nextFromElements()
+            }
+        }
+
+        // MARK: - Element mode
+
+        private mutating func nextFromElements() async throws -> E.Event? {
+            guard !Task.isCancelled else {
+                finalize()
+                return nil
+            }
+
+            guard case .elements(var iterator) = mode else {
+                return nil
+            }
+
+            let element: E.Event?
+            do {
+                element = try await iterator.next()
+            } catch {
+                // The injected source finished with an error: rethrow as-is.
+                finalize()
+                throw error
+            }
+            mode = .elements(iterator: iterator)
+
+            guard let element else {
+                // Source finished cleanly: the source owns terminal-ness, so no
+                // unexpectedDisconnect is synthesized here.
+                finalize()
+                return nil
+            }
+
+            return element
+        }
+
+        // MARK: - Line mode
+
+        private mutating func nextFromLines() async throws -> E.Event? {
             // Honor cancellation before doing any work.
             guard !Task.isCancelled else {
                 finalize()
@@ -139,8 +246,13 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 return nil
             }
 
+            guard case .lines(var iterator, var parser) = mode else {
+                return nil
+            }
+
             while true {
                 guard !Task.isCancelled else {
+                    mode = .lines(iterator: iterator, parser: parser)
                     finalize()
                     return nil
                 }
@@ -150,12 +262,14 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                     line = try await iterator.next()
                 } catch {
                     // The transport was cut mid-stream.
+                    mode = .lines(iterator: iterator, parser: parser)
                     finalize()
                     throw SSEError.unexpectedDisconnect(lastEventID: parser.lastEventID)
                 }
 
                 guard let line else {
                     // Source finished. Without a terminal, this is unexpected.
+                    mode = .lines(iterator: iterator, parser: parser)
                     finalize()
                     throw SSEError.unexpectedDisconnect(lastEventID: parser.lastEventID)
                 }
@@ -169,9 +283,11 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 do {
                     event = try E.Event(eventName: rawEvent.event, data: rawEvent.data)
                 } catch let error as SSEError {
+                    mode = .lines(iterator: iterator, parser: parser)
                     finalize()
                     throw error
                 } catch {
+                    mode = .lines(iterator: iterator, parser: parser)
                     finalize()
                     throw SSEError.decodingFailed(error)
                 }
@@ -180,6 +296,7 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                     terminalDelivered = true
                 }
 
+                mode = .lines(iterator: iterator, parser: parser)
                 return event
             }
         }
