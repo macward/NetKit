@@ -7,8 +7,8 @@ import SwiftSyntaxMacros
 ///
 /// Markers are peer macros that generate no code of their own. They exist so the
 /// compiler validates their placement and so the verb macro can read them as
-/// attributes on stored properties. Custom-name handling and cross-validation
-/// diagnostics are added in later tasks.
+/// attributes on stored properties — the verb macro owns custom-name handling and the
+/// cross-validation diagnostics, since it alone sees the whole type.
 protocol MarkerMacro: PeerMacro {}
 
 extension MarkerMacro {

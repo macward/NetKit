@@ -37,12 +37,19 @@ public macro DELETE(_ path: String) = #externalMacro(module: "NetKitMacrosImpl",
 
 /// Marks a stored property whose value substitutes the matching `{placeholder}` in
 /// the endpoint's path template at runtime.
+///
+/// Pass a custom name when the placeholder differs from the Swift property name —
+/// `@Path("user_id") var id` maps the property `id` to the `{user_id}` placeholder.
 @attached(peer)
-public macro Path() = #externalMacro(module: "NetKitMacrosImpl", type: "PathMacro")
+public macro Path(_ name: String? = nil) = #externalMacro(module: "NetKitMacrosImpl", type: "PathMacro")
 
 /// Marks a stored property that is appended to the endpoint's `queryParameters`.
+///
+/// Pass a custom name to emit a different query key than the Swift property name —
+/// `@Query("page_size") var pageSize` emits `page_size`. Optional values that are
+/// `nil` are omitted; array values repeat the key per element.
 @attached(peer)
-public macro Query() = #externalMacro(module: "NetKitMacrosImpl", type: "QueryMacro")
+public macro Query(_ name: String? = nil) = #externalMacro(module: "NetKitMacrosImpl", type: "QueryMacro")
 
 /// Marks the stored property used as the endpoint's request `body`.
 @attached(peer)
