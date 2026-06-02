@@ -33,16 +33,36 @@ public final class QueryClient {
     /// Pending collection tasks, keyed so a new observer can cancel one in flight.
     @ObservationIgnored private var pendingGC: [QueryKey: Task<Void, Never>] = [:]
 
-    public init(network: any NetworkClientProtocol, gcTime: Duration = .seconds(60)) {
+    /// Resolves a stable identifier for the active session, folded into every key so a
+    /// value decoded under one session is never served to another (R12). Mirrors how
+    /// ``CacheKeyGenerator`` scopes cached bytes by `Authorization`. Returns `nil` when
+    /// there is no active session (the default), which disables auth scoping.
+    @ObservationIgnored private let authContext: @MainActor () -> String?
+
+    public init(
+        network: any NetworkClientProtocol,
+        gcTime: Duration = .seconds(60),
+        authContext: @escaping @MainActor () -> String? = { nil }
+    ) {
         self.network = network
         self.gcTime = gcTime
+        self.authContext = authContext
+    }
+
+    // MARK: Key derivation
+
+    /// Builds the auth-scoped key for an endpoint. The single source of truth for keying:
+    /// both the store and ``Resource`` route through here so the active session is always
+    /// part of the identity (R12).
+    internal func key<E: Endpoint>(for endpoint: E) -> QueryKey {
+        QueryKey(endpoint, authContext: authContext())
     }
 
     // MARK: Entry registry
 
     /// Returns the shared entry for an endpoint, creating and wiring it on first use.
     public func entry<E: Endpoint>(for endpoint: E) -> QueryEntry<E.Response> {
-        let key: QueryKey = QueryKey(endpoint)
+        let key: QueryKey = key(for: endpoint)
         if let existing = entries[key] as? QueryEntry<E.Response> {
             return existing
         }
@@ -112,7 +132,7 @@ public final class QueryClient {
     /// Invalidates a resource: marks it stale, and refetches only if it is currently
     /// observed. Unobserved entries revalidate lazily the next time a view observes them.
     public func invalidate<E: Endpoint>(_ endpoint: E) {
-        guard let entry = entries[QueryKey(endpoint)] else { return }
+        guard let entry = entries[key(for: endpoint)] else { return }
         entry.markStale()
         if entry.observerCount > 0 {
             entry.triggerRefetch()

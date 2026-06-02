@@ -85,7 +85,7 @@ public struct Resource<E: Endpoint>: DynamicProperty {
         MainActor.assumeIsolated {
             guard let client else { return }
             client.activateIfIdle(endpoint, staleTime: staleTime)
-            token.bind(to: QueryKey(endpoint), client: client)
+            token.bind(to: client.key(for: endpoint), client: client)
         }
     }
 }

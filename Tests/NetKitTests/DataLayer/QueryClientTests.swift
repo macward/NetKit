@@ -93,7 +93,7 @@ struct QueryClientTests {
         ])
         let client: QueryClient = QueryClient(network: mock)
 
-        let key: QueryKey = QueryKey(GetDLUser(id: "1"))
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
         let entry: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
         client.retain(key)   // simulate a live observer
         client.activateIfIdle(GetDLUser(id: "1"), staleTime: .zero)
@@ -131,7 +131,7 @@ struct QueryClientTests {
         await mock.stub(GetDLUser.self) { DLUser(id: $0.id, name: "Ada") }
         let client: QueryClient = QueryClient(network: mock, gcTime: .milliseconds(30))
 
-        let key: QueryKey = QueryKey(GetDLUser(id: "1"))
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
         _ = client.entry(for: GetDLUser(id: "1"))
         client.retain(key)
         #expect(client.isTracked(key))
@@ -148,7 +148,7 @@ struct QueryClientTests {
         await mock.stub(GetDLUser.self) { DLUser(id: $0.id, name: "Ada") }
         let client: QueryClient = QueryClient(network: mock, gcTime: .milliseconds(30))
 
-        let key: QueryKey = QueryKey(GetDLUser(id: "1"))
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
         _ = client.entry(for: GetDLUser(id: "1"))
         client.retain(key)
         client.release(key)
@@ -165,7 +165,7 @@ struct QueryClientTests {
         await mock.stub(GetDLUser.self) { DLUser(id: $0.id, name: "Ada") }
         let client: QueryClient = QueryClient(network: mock, gcTime: .milliseconds(30))
 
-        let key: QueryKey = QueryKey(GetDLUser(id: "1"))
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
         _ = client.entry(for: GetDLUser(id: "1"))
         client.retain(key)
         client.retain(key)
@@ -177,6 +177,57 @@ struct QueryClientTests {
         client.release(key)
         try await waitUntil { !client.isTracked(key) }
     }
+
+    // MARK: - Auth isolation (R12)
+
+    @Test("two auth sessions produce distinct keys for the same endpoint")
+    func authContextProducesDistinctKeys() {
+        let endpoint: GetDLUser = GetDLUser(id: "1")
+        let keyA: QueryKey = QueryKey(endpoint, authContext: "userA")
+        let keyB: QueryKey = QueryKey(endpoint, authContext: "userB")
+        let keyNone: QueryKey = QueryKey(endpoint, authContext: nil)
+
+        #expect(keyA != keyB)
+        #expect(keyA != keyNone)
+        #expect(keyB != keyNone)
+    }
+
+    @Test("same session shares one key (dedup/cache not degraded)")
+    func authContextKeepsSharedCacheWithinSession() {
+        let endpoint: GetDLUser = GetDLUser(id: "1")
+        #expect(QueryKey(endpoint, authContext: "userA") == QueryKey(endpoint, authContext: "userA"))
+    }
+
+    @Test("a value cached under one session is not served to another after a session switch")
+    func authContextIsolatesSessions() async throws {
+        let session: SessionBox = SessionBox(id: "A")
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stub(GetDLUser.self) { DLUser(id: $0.id, name: "Ada") }
+        let client: QueryClient = QueryClient(network: mock, authContext: { session.id })
+
+        // Session A loads and caches the value.
+        let entryA: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .zero)
+        try await waitUntil { entryA.value != nil }
+        #expect(entryA.value == DLUser(id: "1", name: "Ada"))
+        // Within session A the same endpoint still resolves to the loaded entry.
+        #expect(client.entry(for: GetDLUser(id: "1")) === entryA)
+
+        // Switch session: the same endpoint must resolve to a different, empty entry.
+        session.id = "B"
+        let entryB: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
+        #expect(entryB !== entryA)
+        #expect(entryB.value == nil)   // session B does not see session A's value (R12)
+    }
+}
+
+// MARK: - Auth fixtures
+
+/// Mutable session identifier so a test can simulate a session switch between awaits.
+@MainActor
+private final class SessionBox {
+    var id: String
+    init(id: String) { self.id = id }
 }
 
 // MARK: - Helpers

@@ -10,6 +10,15 @@ import Foundation
 /// key on purpose: two endpoints with an identical URL but different response types are
 /// distinct resources and must not collide.
 ///
+/// ## Auth isolation
+///
+/// A resource decoded under one session must never be served to another (R12). The key
+/// therefore folds in an *auth context* — a stable identifier for the active session —
+/// mirroring how ``CacheKeyGenerator`` includes the `Authorization` header so cached
+/// bytes are not shared across auth contexts. The ``QueryClient`` resolves the active
+/// session and is the single place that builds keys with it (see `QueryClient.key(for:)`);
+/// callers should not construct auth-scoped keys by hand.
+///
 /// - Note: Keying assumes the endpoint is deterministic. Endpoints whose `body`,
 ///   `queryParameters`, or `path` vary across evaluations (e.g. closures, timestamps)
 ///   will not key stably — that is a documented contract of the data layer.
@@ -19,7 +28,19 @@ public struct QueryKey: Hashable, Sendable {
     /// versions; do not parse or persist it.
     public let raw: String
 
+    /// Derives a key from an endpoint with no auth scoping. Two sessions would collide on
+    /// this key; prefer `QueryClient.key(for:)`, which folds in the active auth context.
     public init<E: Endpoint>(_ endpoint: E) {
+        self.init(endpoint, authContext: nil)
+    }
+
+    /// Derives a key from an endpoint, scoped to an auth context.
+    ///
+    /// - Parameter authContext: A stable identifier for the active session (e.g. a user
+    ///   id or a token fingerprint). When non-`nil` and non-empty, two distinct sessions
+    ///   produce distinct keys for the same endpoint, isolating their decoded values
+    ///   (R12). Pass `nil` for unauthenticated resources or when no session is active.
+    public init<E: Endpoint>(_ endpoint: E, authContext: String?) {
         var parts: [String] = [endpoint.method.rawValue, endpoint.path]
 
         // Query parameters, order-independent.
@@ -33,6 +54,11 @@ public struct QueryKey: Hashable, Sendable {
         if let body = endpoint.body,
            let data: Data = try? JSONEncoder().encode(BodyFingerprint(body)) {
             parts.append("body:\(data.count):\(data.hashValue)")
+        }
+
+        // Auth context, so a value cached under one session is invisible to another (R12).
+        if let authContext, !authContext.isEmpty {
+            parts.append("auth:\(authContext)")
         }
 
         self.raw = parts.joined(separator: "|")
