@@ -14,10 +14,10 @@ import Observation
 /// network actor and back. This mirrors TanStack's single-threaded model and removes
 /// data races by construction.
 ///
-/// - Note: This is a spike. Two pieces are intentionally simplified and marked below:
-///   garbage collection by `observerCount`, and stale-driven revalidation on lifecycle
-///   events (foreground / appear). The initial-load, shared-cache, dedup, invalidate and
-///   optimistic-write paths are fully wired.
+/// - Note: Initial load, shared cache, query-level dedup, invalidation, optimistic
+///   writes, and observer-count garbage collection are all wired. Stale-driven
+///   revalidation on lifecycle events (app foreground, view reappear) is handled at the
+///   ``Resource`` layer rather than per render, to avoid a refetch storm.
 @MainActor
 @Observable
 public final class QueryClient {
@@ -48,7 +48,7 @@ public final class QueryClient {
         }
 
         let fresh: QueryEntry<E.Response> = QueryEntry<E.Response>()
-        fresh.refetch = { [weak self, weak fresh] in
+        fresh.refetchHandler = { [weak self, weak fresh] in
             guard let self, let fresh else { return }
             self.performFetch(endpoint, into: fresh)
         }
@@ -64,7 +64,7 @@ public final class QueryClient {
     /// already-loaded value with no extra request. Stale-driven revalidation (when
     /// `staleTime` elapses) is the TODO that belongs to lifecycle events, not to every
     /// render — wiring it here would cause a refetch storm.
-    func activateIfIdle<E: Endpoint>(_ endpoint: E, staleTime: Duration) {
+    internal func activateIfIdle<E: Endpoint>(_ endpoint: E, staleTime: Duration) {
         let entry: QueryEntry<E.Response> = entry(for: endpoint)
         guard entry.isIdle else { return }
         performFetch(endpoint, into: entry)
@@ -77,7 +77,7 @@ public final class QueryClient {
     ///
     /// Called by ``Resource`` when a view starts observing. The entry is expected to
     /// already exist (the resource creates it via ``entry(for:)`` first).
-    func retain(_ key: QueryKey) {
+    internal func retain(_ key: QueryKey) {
         pendingGC[key]?.cancel()
         pendingGC[key] = nil
         entries[key]?.observerCount += 1
@@ -85,7 +85,7 @@ public final class QueryClient {
 
     /// Deregisters an observer. When the count reaches zero, schedules collection after
     /// ``gcTime``; if an observer returns within that window, ``retain(_:)`` cancels it.
-    func release(_ key: QueryKey) {
+    internal func release(_ key: QueryKey) {
         guard let entry = entries[key] else { return }
         entry.observerCount = max(0, entry.observerCount - 1)
         guard entry.observerCount == 0 else { return }
@@ -130,12 +130,12 @@ public final class QueryClient {
     // MARK: Inspection (internal)
 
     /// Whether an entry for this key is currently held in the registry.
-    func isTracked(_ key: QueryKey) -> Bool {
+    internal func isTracked(_ key: QueryKey) -> Bool {
         entries[key] != nil
     }
 
     /// The number of live observers for a key, or zero if untracked.
-    func observerCount(_ key: QueryKey) -> Int {
+    internal func observerCount(_ key: QueryKey) -> Int {
         entries[key]?.observerCount ?? 0
     }
 

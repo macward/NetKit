@@ -48,25 +48,47 @@ public final class QueryEntry<Value: Sendable>: AnyQueryEntry {
     @ObservationIgnored var updatedAt: ContinuousClock.Instant?
     @ObservationIgnored var inflight: Task<Void, Never>?
     @ObservationIgnored var observerCount: Int = 0
-    @ObservationIgnored var refetch: @MainActor () -> Void = {}
 
-    init() {}
+    /// The fetch closure wired by ``QueryClient`` when the entry is created. Internal
+    /// mechanics; views drive refetching through the public ``refetch()`` instead.
+    @ObservationIgnored var refetchHandler: @MainActor () -> Void = {}
+
+    /// Entries are created exclusively by ``QueryClient/entry(for:)``; consumers never
+    /// construct one directly.
+    internal init() {}
 
     // MARK: Convenience accessors for the view
 
+    /// The decoded value if the resource has loaded successfully, otherwise `nil`.
     public var value: Value? {
         if case .success(let value) = phase { return value }
         return nil
     }
 
+    /// The error from the last failed load, or `nil` if the resource has not failed.
     public var error: (any Error)? {
         if case .failure(let error) = phase { return error }
         return nil
     }
 
+    /// `true` while an initial load is in flight (no value yet). Stays `false` during a
+    /// stale-while-revalidate refresh, when a previous value is still being shown.
     public var isLoading: Bool {
         if case .loading = phase { return true }
         return false
+    }
+
+    // MARK: Manual refetch
+
+    /// Forces a fresh fetch of this resource, ignoring `staleTime`.
+    ///
+    /// Intended to be called from the view — e.g. a pull-to-refresh or a "retry" button.
+    /// No-ops if a fetch is already in flight (query-level dedup drops the duplicate
+    /// rather than coalescing), and keeps the current value visible while revalidating
+    /// (stale-while-revalidate). Has no effect on an entry not yet registered with a
+    /// ``QueryClient`` (which cannot happen for entries obtained via `@Resource`).
+    public func refetch() {
+        triggerRefetch()
     }
 
     var isIdle: Bool {
@@ -81,7 +103,7 @@ public final class QueryEntry<Value: Sendable>: AnyQueryEntry {
     }
 
     func triggerRefetch() {
-        refetch()
+        refetchHandler()
     }
 
     func cancelInflight() {

@@ -14,6 +14,9 @@ import Foundation
 ///   `queryParameters`, or `path` vary across evaluations (e.g. closures, timestamps)
 ///   will not key stably — that is a documented contract of the data layer.
 public struct QueryKey: Hashable, Sendable {
+    /// The content-derived identity string. Exposed for debugging and logging only —
+    /// its exact format is an implementation detail and is **not** stable across library
+    /// versions; do not parse or persist it.
     public let raw: String
 
     public init<E: Endpoint>(_ endpoint: E) {
