@@ -259,6 +259,122 @@ struct QueryClientTests {
         #expect(calls == 2)   // initial load + one revalidation; the duplicate was dropped
     }
 
+    // MARK: - Stale-on-reobserve (R13, view reappear)
+
+    @Test("re-observing a stale entry triggers a revalidation")
+    func reobserveStaleRevalidates() async throws {
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stubSequence(GetDLUser.self, responses: [
+            DLUser(id: "1", name: "v1"),
+            DLUser(id: "1", name: "v2")
+        ])
+        let client: QueryClient = QueryClient(network: mock, gcTime: .seconds(10))   // reappear within gcTime
+
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
+        let entry: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
+        client.retain(key)
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .milliseconds(20))
+        try await waitUntil { entry.value == DLUser(id: "1", name: "v1") }
+
+        client.release(key)                            // view disappears (grace window)
+        try await Task.sleep(for: .milliseconds(40))   // staleTime elapses
+        client.retain(key)                             // view reappears → re-observe
+
+        try await waitUntil { entry.value == DLUser(id: "1", name: "v2") }
+        let calls: Int = await mock.callCount(for: GetDLUser.self)
+        #expect(calls == 2)
+    }
+
+    @Test("re-observing a still-fresh entry does not refetch")
+    func reobserveFreshDoesNotRefetch() async throws {
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stub(GetDLUser.self) { DLUser(id: $0.id, name: "Ada") }
+        let client: QueryClient = QueryClient(network: mock)
+
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
+        let entry: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
+        client.retain(key)
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .seconds(60))
+        try await waitUntil { entry.value != nil }
+
+        client.release(key)
+        client.retain(key)   // reappear while still fresh → no request
+        try await Task.sleep(for: .milliseconds(40))
+
+        let calls: Int = await mock.callCount(for: GetDLUser.self)
+        #expect(calls == 1)
+    }
+
+    @Test("the previous value stays visible during a stale-on-reobserve revalidation (SWR)")
+    func reobserveKeepsPreviousValueVisible() async throws {
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stubSequence(GetDLUser.self, responses: [
+            DLUser(id: "1", name: "v1"),
+            DLUser(id: "1", name: "v2")
+        ], delays: [0, 0.05])   // v1 immediate, v2 delayed so we can observe SWR
+        let client: QueryClient = QueryClient(network: mock, gcTime: .seconds(10))   // reappear within gcTime
+
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
+        let entry: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
+        client.retain(key)
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .milliseconds(20))
+        try await waitUntil { entry.value == DLUser(id: "1", name: "v1") }
+
+        client.release(key)
+        try await Task.sleep(for: .milliseconds(40))
+        client.retain(key)   // revalidation starts (0.05s in flight)
+
+        // While revalidating, the stale value is still shown — not nil, not loading.
+        #expect(entry.value == DLUser(id: "1", name: "v1"))
+        #expect(entry.isLoading == false)
+
+        try await waitUntil { entry.value == DLUser(id: "1", name: "v2") }
+    }
+
+    @Test("repeated renders without re-observation do not refetch a stale entry")
+    func rendersWithoutReobserveDoNotRefetch() async throws {
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stub(GetDLUser.self) { DLUser(id: $0.id, name: "Ada") }
+        let client: QueryClient = QueryClient(network: mock)
+
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
+        let entry: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
+        client.retain(key)
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .milliseconds(20))
+        try await waitUntil { entry.value != nil }
+
+        try await Task.sleep(for: .milliseconds(40))   // now stale, but no re-observe
+        // Simulate repeated renders of the same, unchanged view.
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .milliseconds(20))
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .milliseconds(20))
+
+        let calls: Int = await mock.callCount(for: GetDLUser.self)
+        #expect(calls == 1)   // render != re-observe; only retain revalidates
+    }
+
+    @Test("a simultaneous foreground + reappear coalesce into a single revalidation")
+    func foregroundAndReobserveCoalesce() async throws {
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stub(GetDLUser.self, delay: 0.05) { DLUser(id: $0.id, name: "Ada") }
+        let client: QueryClient = QueryClient(network: mock, gcTime: .seconds(10))
+
+        let key: QueryKey = client.key(for: GetDLUser(id: "1"))
+        let entry: QueryEntry<DLUser> = client.entry(for: GetDLUser(id: "1"))
+        client.retain(key)
+        client.activateIfIdle(GetDLUser(id: "1"), staleTime: .milliseconds(20))
+        try await waitUntil { entry.value != nil }
+
+        try await Task.sleep(for: .milliseconds(40))   // stale
+        // Reappear and foreground both fire for the same stale, observed entry.
+        client.revalidateStaleObservers()
+        client.release(key)
+        client.retain(key)
+
+        try await Task.sleep(for: .milliseconds(120))   // > stub delay
+        let calls: Int = await mock.callCount(for: GetDLUser.self)
+        #expect(calls == 2)   // initial load + one coalesced revalidation, not three
+    }
+
     // MARK: - Auth isolation (R12)
 
     @Test("two auth sessions produce distinct keys for the same endpoint")

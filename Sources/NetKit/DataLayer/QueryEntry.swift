@@ -15,6 +15,12 @@ protocol AnyQueryEntry: AnyObject {
     /// revalidation to decide whether this entry needs refreshing.
     var staleTime: Duration { get set }
 
+    /// Whether the entry has never been activated (no value, no error, not loading).
+    var isIdle: Bool { get }
+
+    /// Whether the entry currently holds a successfully decoded value.
+    var hasValue: Bool { get }
+
     /// Whether the cached value is stale as of `now`: `true` if it was never loaded (or
     /// explicitly marked stale), otherwise `true` once `staleTime` has elapsed since the
     /// last successful load.
@@ -107,6 +113,10 @@ public final class QueryEntry<Value: Sendable>: AnyQueryEntry {
     var isIdle: Bool {
         if case .idle = phase { return true }
         return false
+    }
+
+    var hasValue: Bool {
+        value != nil
     }
 
     // MARK: AnyQueryEntry

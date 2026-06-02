@@ -95,8 +95,9 @@ public final class QueryClient {
     ///
     /// Subsequent renders are no-ops, and a second view mounting the same key sees the
     /// already-loaded value with no extra request. Stale-driven revalidation (when
-    /// `staleTime` elapses) is the TODO that belongs to lifecycle events, not to every
-    /// render — wiring it here would cause a refetch storm.
+    /// `staleTime` elapses) is deliberately *not* wired here — doing so on every render
+    /// would cause a refetch storm. It is driven instead by observation transitions
+    /// (``retain(_:)``, on view reappear) and app foreground (``revalidateStaleObservers()``).
     internal func activateIfIdle<E: Endpoint>(_ endpoint: E, staleTime: Duration) {
         let entry: QueryEntry<E.Response> = entry(for: endpoint)
         guard entry.isIdle else { return }
@@ -131,12 +132,27 @@ public final class QueryClient {
     /// Registers a live observer for a key. Cancels any pending collection so an entry
     /// being observed again is rescued from the grace window.
     ///
-    /// Called by ``Resource`` when a view starts observing. The entry is expected to
-    /// already exist (the resource creates it via ``entry(for:)`` first).
+    /// Called by ``Resource`` when a view starts observing — i.e. on the *observation
+    /// transition* (mount / reappear / key change), not on every render. The entry is
+    /// expected to already exist (the resource creates it via ``entry(for:)`` first).
+    ///
+    /// Stale-on-reobserve (R13, reappear vertex): when a view re-observes a resource that
+    /// already has a value but has aged past its `staleTime`, this triggers a revalidation.
+    /// Because it is anchored to the transition rather than to `update()`, repeated renders
+    /// of an unchanged view never refetch. ``QueryEntry/triggerRefetch()`` dedups against
+    /// the initial fetch (so the first mount issues a single request) and keeps the current
+    /// value visible while it refreshes (stale-while-revalidate).
     internal func retain(_ key: QueryKey) {
         pendingGC[key]?.cancel()
         pendingGC[key] = nil
-        entries[key]?.observerCount += 1
+        guard let entry = entries[key] else { return }
+        entry.observerCount += 1
+        // Only a resource that already has a value can be "reappeared while stale"; a
+        // first mount is still loading (no value) and its fetch was issued by
+        // activateIfIdle, so we must not fire here.
+        if entry.hasValue, entry.isStale(asOf: clock.now) {
+            entry.triggerRefetch()
+        }
     }
 
     /// Deregisters an observer. When the count reaches zero, schedules collection after
