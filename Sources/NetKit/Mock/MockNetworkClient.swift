@@ -396,6 +396,13 @@ public actor MockNetworkClient: NetworkClientProtocol {
         continuation.finish()
         return destination
     }
+
+    // MARK: - Streaming Methods
+
+    public nonisolated func stream<E: SSEEndpoint>(_ endpoint: E) -> SSEStream<E> {
+        // TODO(006): real stubStream API + error injection.
+        SSEStream(lineSource: { AsyncThrowingStream { $0.finish() } })
+    }
 }
 
 /// Errors specific to MockNetworkClient.

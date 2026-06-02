@@ -979,3 +979,20 @@ extension NetworkClient {
         }
     }
 }
+
+// MARK: - Server-Sent Events (SSE) Transport
+
+extension NetworkClient {
+    /// The client dependencies the SSE streaming path needs. This in-class
+    /// accessor is the only streaming code that reads the `private` stored
+    /// properties; the rest of the streaming surface lives in
+    /// `SSEByteTransport.swift`.
+    internal var sseDependencies: SSEStreamDependencies {
+        SSEStreamDependencies(
+            environment: environment,
+            interceptors: interceptors,
+            encoder: encoder,
+            sessionConfiguration: session.configuration
+        )
+    }
+}

@@ -48,4 +48,11 @@ public protocol NetworkClientProtocol: Sendable {
     ///   - destination: The URL where the file should be saved.
     /// - Returns: A `DownloadResult` containing progress stream and response task.
     func download<E: Endpoint>(from endpoint: E, to destination: URL) async -> DownloadResult
+
+    // MARK: - Streaming Methods
+
+    /// Opens a Server-Sent Events stream for the given endpoint.
+    /// - Parameter endpoint: The SSE endpoint to stream.
+    /// - Returns: An `SSEStream` of typed events, consumable with `for try await`.
+    func stream<E: SSEEndpoint>(_ endpoint: E) -> SSEStream<E>
 }
