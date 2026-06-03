@@ -37,32 +37,50 @@ extension NetworkClient {
         let dependencies: SSEStreamDependencies = sseDependencies
         let taskBox: SSEStreamTaskBox = SSEStreamTaskBox()
 
-        // Derive config from the shared one so test URLProtocols are inherited;
-        // raise timeouts for a persistent connection. Mutate a copy only.
-        let streamingConfiguration: URLSessionConfiguration = dependencies.sessionConfiguration
+        // Derive config from the shared session so test URLProtocols are inherited;
+        // raise timeouts for a persistent connection. `session.configuration` returns
+        // a mutable copy — safe to mutate without affecting the original session.
+        let streamingConfiguration: URLSessionConfiguration = dependencies.session.configuration
         streamingConfiguration.timeoutIntervalForRequest = timeout
         streamingConfiguration.timeoutIntervalForResource = timeout
 
         let environment: NetworkEnvironment = dependencies.environment
         let interceptors: [any Interceptor] = dependencies.interceptors
         let encoder: JSONEncoder = dependencies.encoder
+        let baseSession: URLSession = dependencies.session
 
-        let lineSource: @Sendable () -> AsyncThrowingStream<String, any Error> = {
-            SSEByteTransport.makeLineSource(configuration: streamingConfiguration, taskBox: taskBox) {
-                var request: URLRequest = try URLRequest(
-                    endpoint: endpoint,
-                    environment: environment,
-                    additionalHeaders: [:],
-                    timeoutOverride: timeout,
-                    encoder: encoder
-                )
-                // Force the SSE Accept header, overriding any default.
-                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                for interceptor in interceptors {
-                    request = try await interceptor.intercept(request: request)
+        let lineSource: @Sendable () -> AsyncThrowingStream<String, any Error> = { [self] in
+            SSEByteTransport.makeLineSource(
+                configuration: streamingConfiguration,
+                baseSession: baseSession,
+                taskBox: taskBox,
+                makeRequest: {
+                    var request: URLRequest = try URLRequest(
+                        endpoint: endpoint,
+                        environment: environment,
+                        additionalHeaders: [:],
+                        timeoutOverride: timeout,
+                        encoder: encoder
+                    )
+                    // Force the SSE Accept header, overriding any default.
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    for interceptor in interceptors {
+                        request = try await interceptor.intercept(request: request)
+                    }
+                    return request
+                },
+                onResponse: { httpResponse, request in
+                    let snapshot: RequestSnapshot = RequestSnapshot(request: request)
+                    // Run response interceptors with empty data — SSE has no buffered
+                    // body at connection-open time, but interceptors should still observe
+                    // headers (e.g. for logging or 401 detection).
+                    var data: Data = Data()
+                    for interceptor in interceptors.reversed() {
+                        data = try await interceptor.intercept(response: httpResponse, data: data)
+                    }
+                    try self.validateResponse(httpResponse, request: snapshot, data: data)
                 }
-                return request
-            }
+            )
         }
 
         return SSEStream(
@@ -79,7 +97,9 @@ internal struct SSEStreamDependencies: Sendable {
     let environment: NetworkEnvironment
     let interceptors: [any Interceptor]
     let encoder: JSONEncoder
-    let sessionConfiguration: URLSessionConfiguration
+    /// The full session — not just its configuration — so that a delegate
+    /// (e.g. `CertificatePinningDelegate`) is inherited by the streaming session.
+    let session: URLSession
 }
 
 /// A `Sendable` holder for the in-flight streaming data task, so the transport
@@ -122,6 +142,9 @@ enum SSEByteTransport {
     /// - Parameters:
     ///   - configuration: The session configuration (already timeout-adjusted
     ///     and inheriting any test `protocolClasses`).
+    ///   - baseSession: The client's underlying session. Its delegate (e.g. a
+    ///     `CertificatePinningDelegate`) is reused so that security policies apply
+    ///     to streaming connections, not just regular requests.
     ///   - taskBox: A holder the in-flight data task is written into, so the
     ///     `SSEStream` cancellation hook can cut the request.
     ///   - makeRequest: An async builder for the outgoing request, run inside the
@@ -130,19 +153,36 @@ enum SSEByteTransport {
     /// - Returns: A fresh line stream.
     static func makeLineSource(
         configuration: URLSessionConfiguration,
+        baseSession: URLSession,
         taskBox: SSEStreamTaskBox,
-        makeRequest: @escaping @Sendable () async throws -> URLRequest
+        makeRequest: @escaping @Sendable () async throws -> URLRequest,
+        onResponse: @escaping @Sendable (HTTPURLResponse, URLRequest) async throws -> Void
     ) -> AsyncThrowingStream<String, any Error> {
         AsyncThrowingStream { continuation in
-            let streamingSession: URLSession = URLSession(configuration: configuration)
+            let streamingSession: URLSession = URLSession(
+                configuration: configuration,
+                delegate: baseSession.delegate,
+                delegateQueue: nil
+            )
 
             let producer: Task<Void, Never> = Task {
                 do {
                     let request: URLRequest = try await makeRequest()
 
-                    let (bytes, _): (URLSession.AsyncBytes, URLResponse) =
+                    let (bytes, urlResponse): (URLSession.AsyncBytes, URLResponse) =
                         try await streamingSession.bytes(for: request)
                     taskBox.set(bytes.task)
+
+                    guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                        throw NetworkError.unknown(
+                            request: RequestSnapshot(request: request),
+                            underlyingError: NSError(domain: "NetKit", code: -1, userInfo: [
+                                NSLocalizedDescriptionKey: "Invalid response type"
+                            ])
+                        )
+                    }
+
+                    try await onResponse(httpResponse, request)
 
                     try await emitLines(from: bytes, into: continuation)
                     continuation.finish()

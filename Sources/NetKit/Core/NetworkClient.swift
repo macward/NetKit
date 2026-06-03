@@ -597,7 +597,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     }
 
     /// Validates the HTTP response status code.
-    private func validateResponse(
+    func validateResponse(
         _ response: HTTPURLResponse,
         request: RequestSnapshot,
         data: Data?
@@ -992,7 +992,7 @@ extension NetworkClient {
             environment: environment,
             interceptors: interceptors,
             encoder: encoder,
-            sessionConfiguration: session.configuration
+            session: session
         )
     }
 }

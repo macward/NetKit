@@ -260,6 +260,12 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 let line: String?
                 do {
                     line = try await iterator.next()
+                } catch let error as NetworkError {
+                    // HTTP-level error (e.g. 4xx/5xx status, connection refused) —
+                    // propagate as-is so callers receive the structured error.
+                    mode = .lines(iterator: iterator, parser: parser)
+                    finalize()
+                    throw error
                 } catch {
                     // The transport was cut mid-stream.
                     mode = .lines(iterator: iterator, parser: parser)

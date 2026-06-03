@@ -46,13 +46,15 @@ private struct ClientStreamEnvironment: NetworkEnvironment {
 /// header injection and to count how many transport hits occur.
 private final class StreamCapturingURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var body: Data = Data()
+    nonisolated(unsafe) static var statusCode: Int = 200
     nonisolated(unsafe) static var capturedRequests: [URLRequest] = []
     nonisolated(unsafe) static var hitCount: Int = 0
     nonisolated(unsafe) static var lock = NSLock()
 
-    static func reset(body: String) {
+    static func reset(body: String, statusCode: Int = 200) {
         lock.lock()
         self.body = Data(body.utf8)
+        self.statusCode = statusCode
         capturedRequests = []
         hitCount = 0
         lock.unlock()
@@ -83,11 +85,12 @@ private final class StreamCapturingURLProtocol: URLProtocol, @unchecked Sendable
         StreamCapturingURLProtocol.capturedRequests.append(request)
         StreamCapturingURLProtocol.hitCount += 1
         let data: Data = StreamCapturingURLProtocol.body
+        let code: Int = StreamCapturingURLProtocol.statusCode
         StreamCapturingURLProtocol.lock.unlock()
 
         let response: HTTPURLResponse = HTTPURLResponse(
             url: request.url!,
-            statusCode: 200,
+            statusCode: code,
             httpVersion: nil,
             headerFields: ["Content-Type": "text/event-stream"]
         )!
@@ -97,6 +100,23 @@ private final class StreamCapturingURLProtocol: URLProtocol, @unchecked Sendable
     }
 
     override func stopLoading() {}
+}
+
+// MARK: - Response-interceptor spy
+
+/// Records every `intercept(response:data:)` call so tests can assert the
+/// response interceptor chain runs on a stream connection.
+private actor ResponseInterceptorSpy: Interceptor {
+    private var _calls: [(statusCode: Int, dataLength: Int)] = []
+
+    var calls: [(statusCode: Int, dataLength: Int)] { _calls }
+
+    nonisolated func intercept(request: URLRequest) async throws -> URLRequest { request }
+
+    func intercept(response: HTTPURLResponse, data: Data) async throws -> Data {
+        _calls.append((statusCode: response.statusCode, dataLength: data.count))
+        return data
+    }
 }
 
 // MARK: - Tests
@@ -180,6 +200,36 @@ struct SSEClientStreamTests {
         #expect(counts.1 == 3)
         // No coalescing: the transport was hit once per stream.
         #expect(StreamCapturingURLProtocol.hits == 2)
+    }
+
+    @Test("Non-2xx HTTP status throws NetworkError before any events are emitted")
+    func nonSuccessStatusThrows() async throws {
+        StreamCapturingURLProtocol.reset(body: "", statusCode: 401)
+        let client: NetworkClient = NetworkClient(
+            environment: ClientStreamEnvironment(),
+            session: makeSession()
+        )
+
+        await #expect(throws: NetworkError.self) {
+            for try await _ in client.stream(ClientStreamEndpoint()) {}
+        }
+    }
+
+    @Test("Response interceptors are invoked with the initial HTTP response")
+    func responseInterceptorsAreInvoked() async throws {
+        StreamCapturingURLProtocol.reset(body: Self.sseBody)
+        let spy: ResponseInterceptorSpy = ResponseInterceptorSpy()
+        let client: NetworkClient = NetworkClient(
+            environment: ClientStreamEnvironment(),
+            interceptors: [spy],
+            session: makeSession()
+        )
+
+        for try await _ in client.stream(ClientStreamEndpoint()) {}
+
+        let calls: [(statusCode: Int, dataLength: Int)] = await spy.calls
+        #expect(calls.count == 1)
+        #expect(calls.first?.statusCode == 200)
     }
 
     private func consumeCount(_ stream: SSEStream<ClientStreamEndpoint>) async throws -> Int {

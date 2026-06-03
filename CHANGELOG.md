@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- SSE streaming now validates the HTTP response status code and runs the response interceptor chain
+  at connection time. Previously `SSEByteTransport` discarded the `URLResponse` returned by
+  `URLSession.bytes(for:)`, so non-2xx responses (401, 403, 500, …) silently streamed garbage bytes
+  instead of throwing. Response interceptors (logging, auth) were also never called on the initial
+  response. The fix captures the `HTTPURLResponse`, runs interceptors with the response headers
+  (empty body — SSE has no buffered response body), then calls `validateResponse` before any lines
+  are emitted. `NetworkError` propagates through `SSEStream.nextFromLines` unchanged so callers
+  receive the structured error rather than `SSEError.unexpectedDisconnect`.
+
+- SSE streaming now inherits certificate pinning from the client's `URLSession`. Previously
+  `SSEByteTransport` created a new `URLSession` using only the session's configuration, silently
+  discarding its `URLSessionDelegate` (e.g. `CertificatePinningDelegate`). A MITM certificate that
+  `request(_:)` would have rejected was therefore accepted by `stream(_:)`. The fix passes the full
+  session (via `SSEStreamDependencies.session`) through to `makeLineSource`, which now constructs
+  the streaming session with `URLSession(configuration:delegate:delegateQueue:)` reusing the
+  original delegate.
+
 ### Added
 
 - Server-Sent Events (SSE) streaming: type-safe, incremental consumption of `text/event-stream`
