@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `SSELineParser` no longer dispatches events whose data buffer is empty, matching the WHATWG SSE
+  spec ("if the data buffer is an empty string, return"). Previously any `event:`, `id:`, or
+  `retry:` field alone caused a dispatch with `data = ""`, which reached the discriminator's
+  `init(eventName:data:)` and typically threw a decoding error that killed the stream. The fix
+  replaces the `hasBufferedField` guard with `!dataLines.isEmpty`: a blank line only dispatches
+  when at least one `data:` field was accumulated for the current event. An explicit `data:` line
+  with an empty value still dispatches (data buffer is non-empty per spec).
+
 - SSE streaming now validates the HTTP response status code and runs the response interceptor chain
   at connection time. Previously `SSEByteTransport` discarded the `URLResponse` returned by
   `URLSession.bytes(for:)`, so non-2xx responses (401, 403, 500, …) silently streamed garbage bytes

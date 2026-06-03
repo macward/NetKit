@@ -11,7 +11,9 @@ import Foundation
 /// produces the correct assembled event.
 ///
 /// Protocol rules implemented:
-/// - A blank line dispatches the buffered event (if it has data or an event name).
+/// - A blank line dispatches the buffered event only when at least one `data:`
+///   field was seen, per the WHATWG spec ("if the data buffer is an empty string,
+///   return without dispatching"). `event:`, `id:`, and `retry:` alone do not trigger dispatch.
 /// - A line beginning with `:` is a comment (e.g. keep-alive) and is ignored.
 /// - A `field: value` line splits on the first `:`; a single leading space after
 ///   the colon is stripped per spec. A line with no colon is a field with an
@@ -33,9 +35,6 @@ struct SSELineParser {
 
     /// Buffered `data:` lines for the event currently being assembled.
     private var dataLines: [String] = []
-
-    /// Whether any field for the current event has been buffered.
-    private var hasBufferedField: Bool = false
 
     /// Creates an empty parser.
     init() {}
@@ -89,15 +88,12 @@ struct SSELineParser {
         switch field {
         case "event":
             currentEvent = value
-            hasBufferedField = true
 
         case "data":
             dataLines.append(value)
-            hasBufferedField = true
 
         case "id":
             lastEventID = value
-            hasBufferedField = true
 
         case "retry":
             // Per spec the retry value must be an integer count of milliseconds;
@@ -105,7 +101,6 @@ struct SSELineParser {
             if let milliseconds = Int(value) {
                 lastRetry = milliseconds
             }
-            hasBufferedField = true
 
         default:
             // Unknown fields are ignored per spec.
@@ -117,10 +112,12 @@ struct SSELineParser {
 
     /// Builds and returns the buffered event, then resets the per-event buffer.
     ///
-    /// Returns `nil` when no field has been buffered (e.g. consecutive blank
-    /// lines or blank lines before any data), so empty dispatches are skipped.
+    /// Per the WHATWG spec, returns `nil` when no `data:` field has been seen
+    /// for the current event (data buffer is effectively empty). Fields like
+    /// `event:`, `id:`, and `retry:` alone do not trigger dispatch.
     private mutating func dispatchEvent() -> SSEEvent? {
-        guard hasBufferedField else {
+        guard !dataLines.isEmpty else {
+            resetEventBuffer()
             return nil
         }
 
@@ -140,6 +137,5 @@ struct SSELineParser {
     private mutating func resetEventBuffer() {
         currentEvent = nil
         dataLines.removeAll()
-        hasBufferedField = false
     }
 }

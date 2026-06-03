@@ -166,4 +166,87 @@ struct SSELineParserTests {
         #expect(events.count == 1)
         #expect(events.first?.data == "only")
     }
+
+    // MARK: - Data-only dispatch rule (WHATWG spec §9.2.6)
+
+    @Test("event: field alone does not dispatch — no data buffer")
+    func eventFieldWithoutDataDoesNotDispatch() {
+        var parser = SSELineParser()
+        // A server-sent ping using only the event field must be silently absorbed.
+        let events = parser.consumeAll([
+            "event: ping",
+            ""
+        ])
+
+        #expect(events.isEmpty)
+    }
+
+    @Test("id: field alone does not dispatch — no data buffer")
+    func idFieldWithoutDataDoesNotDispatch() {
+        var parser = SSELineParser()
+        let events = parser.consumeAll([
+            "id: 42",
+            ""
+        ])
+
+        #expect(events.isEmpty)
+        // The id is still captured for reconnection purposes.
+        #expect(parser.lastEventID == "42")
+    }
+
+    @Test("retry: field alone does not dispatch — no data buffer")
+    func retryFieldWithoutDataDoesNotDispatch() {
+        var parser = SSELineParser()
+        let events = parser.consumeAll([
+            "retry: 3000",
+            ""
+        ])
+
+        #expect(events.isEmpty)
+        #expect(parser.lastRetry == 3000)
+    }
+
+    @Test("event: + id: together without data: do not dispatch")
+    func eventAndIdWithoutDataDoNotDispatch() {
+        var parser = SSELineParser()
+        let events = parser.consumeAll([
+            "event: ping",
+            "id: 7",
+            ""
+        ])
+
+        #expect(events.isEmpty)
+    }
+
+    @Test("data: with empty value dispatches with empty data string")
+    func explicitEmptyDataFieldDispatches() {
+        var parser = SSELineParser()
+        // Per spec: the data buffer is "\n" (non-empty), so an event IS dispatched
+        // with data = "" after the trailing LF is stripped.
+        let events = parser.consumeAll([
+            "data:",
+            ""
+        ])
+
+        #expect(events.count == 1)
+        #expect(events.first?.data == "")
+    }
+
+    @Test("Non-data fields before a real event do not bleed into it")
+    func nonDataFieldsBeforeRealEventAreAbsorbed() {
+        var parser = SSELineParser()
+        // A server that sends heartbeat pings (event-only) between real events
+        // must not poison the next real event.
+        let events = parser.consumeAll([
+            "event: ping",   // heartbeat — no data, should not dispatch
+            "",
+            "event: message",
+            "data: hello",
+            ""
+        ])
+
+        #expect(events.count == 1)
+        #expect(events.first?.event == "message")
+        #expect(events.first?.data == "hello")
+    }
 }
