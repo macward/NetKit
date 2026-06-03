@@ -249,4 +249,17 @@ struct SSELineParserTests {
         #expect(events.first?.event == "message")
         #expect(events.first?.data == "hello")
     }
+
+    @Test("id: with empty value clears lastEventID to nil per WHATWG spec")
+    func emptyIdClearsLastEventID() {
+        var parser = SSELineParser()
+
+        // Set a non-nil id first.
+        _ = parser.consumeAll(["id: 42", "data: first", ""])
+        #expect(parser.lastEventID == "42")
+
+        // An empty id field must clear it.
+        _ = parser.consumeAll(["id:", "data: second", ""])
+        #expect(parser.lastEventID == nil)
+    }
 }

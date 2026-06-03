@@ -289,4 +289,25 @@ struct SSEStreamTests {
 
         #expect(thrown is TransportError)
     }
+
+    @Test("Elements-mode stream stops after delivering a terminal event")
+    func elementsModeStopsOnTerminal() async throws {
+        let events: [StreamEvent] = [.chunk(text: "a"), .done, .chunk(text: "b")]
+        let stream: SSEStream<StreamEndpoint> = SSEStream(elements: {
+            AsyncThrowingStream { continuation in
+                for event in events { continuation.yield(event) }
+                continuation.finish()
+            }
+        })
+
+        var received: [StreamEvent] = []
+        for try await event in stream {
+            received.append(event)
+        }
+
+        // .done is terminal so iteration must stop after it; .chunk("b") must not be delivered.
+        #expect(received.count == 2)
+        if case .chunk(let text) = received.first { #expect(text == "a") }
+        if case .done = received.last {} else { Issue.record("Last event must be .done") }
+    }
 }

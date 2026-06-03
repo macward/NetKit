@@ -93,7 +93,9 @@ struct SSELineParser {
             dataLines.append(value)
 
         case "id":
-            lastEventID = value
+            // Per WHATWG SSE spec §9.2.6 step 5: an empty id value clears the
+            // last-event-ID buffer (nil), rather than setting it to "".
+            lastEventID = value.isEmpty ? nil : value
 
         case "retry":
             // Per spec the retry value must be an integer count of milliseconds;

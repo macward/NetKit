@@ -26,6 +26,17 @@ import Foundation
 /// - ``SSEError/unexpectedDisconnect(lastEventID:)`` when the transport ends or
 ///   errors *before* a terminal event was delivered.
 ///
+/// ## Single-pass contract
+///
+/// `SSEStream` is **single-pass**. Each call to `makeAsyncIterator()` — including
+/// an implicit call via `for try await` — and each access to ``rawEvents``
+/// invokes the underlying line-source factory, which opens a fresh HTTP
+/// connection to the server. Iterating the same `SSEStream` value twice, or
+/// consuming ``rawEvents`` while a typed `for try await` loop is active, opens
+/// two simultaneous connections and makes two separate server calls (two billed
+/// LLM requests, duplicate side-effects). Design your callers to consume a
+/// stream exactly once.
+///
 /// ## Testability seam
 ///
 /// `SSEStream` does not open any network connection itself. It is constructed
@@ -114,7 +125,7 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
         }
     }
 
-    /// A view over the same transport that yields the raw ``SSEEvent`` values
+    /// A view over the transport that yields the raw ``SSEEvent`` values
     /// without typed decoding.
     ///
     /// This exposes the lower-level transport for callers that want to inspect
@@ -122,15 +133,22 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
     /// ``SSELineParser`` but does not invoke the discriminator, apply terminal
     /// semantics, or raise ``SSEError/unexpectedDisconnect(lastEventID:)`` on a
     /// bare end. Transport errors are still propagated.
+    ///
+    /// > Important: Accessing `rawEvents` calls the line-source factory and
+    /// > opens a **new, independent connection**. Consuming `rawEvents` while a
+    /// > typed `for try await` loop over the same `SSEStream` is active opens
+    /// > two simultaneous connections. Use one or the other, not both.
     public var rawEvents: AsyncThrowingStream<SSEEvent, any Error> {
         guard case .lines(let lineSource) = source else {
             // Elements mode has no wire-level events to expose.
             return AsyncThrowingStream { $0.finish() }
         }
-        let source: AsyncThrowingStream<String, any Error> = lineSource()
         let cancel: @Sendable () -> Void = onCancel
         return AsyncThrowingStream { continuation in
             let task = Task {
+                // Defer the factory call to inside the Task so the connection is
+                // not opened until iteration begins (not on property access).
+                let source: AsyncThrowingStream<String, any Error> = lineSource()
                 var parser = SSELineParser()
                 do {
                     for try await line in source {
@@ -207,6 +225,12 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 return nil
             }
 
+            // A terminal event was already delivered; this is a clean end.
+            guard !terminalDelivered else {
+                finalize()
+                return nil
+            }
+
             guard case .elements(var iterator) = mode else {
                 return nil
             }
@@ -226,6 +250,10 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 // unexpectedDisconnect is synthesized here.
                 finalize()
                 return nil
+            }
+
+            if element.isTerminal {
+                terminalDelivered = true
             }
 
             return element

@@ -40,6 +40,71 @@ private struct ClientStreamEnvironment: NetworkEnvironment {
     var timeout: TimeInterval = 1
 }
 
+// MARK: - Per-Connection URLProtocol
+
+/// Delivers a distinct body per connection index. Connection 0 waits for
+/// connection 1 to be established before delivering data, ensuring both are
+/// in-flight simultaneously. Used to test cancel-handle isolation.
+private final class PerConnectionURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var bodies: [Data?] = []
+    nonisolated(unsafe) static var connectionCount: Int = 0
+    nonisolated(unsafe) static var lock: NSLock = NSLock()
+    nonisolated(unsafe) static var connection1Ready: DispatchSemaphore = DispatchSemaphore(value: 0)
+
+    static func reset(bodies: [Data?]) {
+        lock.lock()
+        self.bodies = bodies
+        self.connectionCount = 0
+        self.connection1Ready = DispatchSemaphore(value: 0)
+        lock.unlock()
+    }
+
+    override static func canInit(with request: URLRequest) -> Bool { true }
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        PerConnectionURLProtocol.lock.lock()
+        let idx = PerConnectionURLProtocol.connectionCount
+        PerConnectionURLProtocol.connectionCount += 1
+        let body: Data? = idx < PerConnectionURLProtocol.bodies.count
+            ? PerConnectionURLProtocol.bodies[idx] : nil
+        PerConnectionURLProtocol.lock.unlock()
+
+        let client = self.client!
+        let url = request.url!
+
+        Thread.detachNewThread { [idx, body] in
+            if idx == 0 {
+                // Connection 0: hold until connection 1 is established so both
+                // are in-flight concurrently before any data is delivered.
+                _ = PerConnectionURLProtocol.connection1Ready.wait(timeout: .now() + 5)
+            } else {
+                // Signal that connection 1 is open.
+                PerConnectionURLProtocol.connection1Ready.signal()
+            }
+            let response = HTTPURLResponse(
+                url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if let body {
+                client.urlProtocol(self, didLoad: body)
+                client.urlProtocolDidFinishLoading(self)
+            }
+            // No body → leave connection open (stream hangs until task is cancelled).
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+// MARK: - Error box (actor)
+
+private actor ErrorBox {
+    private(set) var value: (any Error)?
+    func set(_ error: any Error) { value = error }
+}
+
 // MARK: - Capturing Mock URLProtocol
 
 /// Captures the outgoing request and returns a fixed SSE body. Used to assert
@@ -230,6 +295,75 @@ struct SSEClientStreamTests {
         let calls: [(statusCode: Int, dataLength: Int)] = await spy.calls
         #expect(calls.count == 1)
         #expect(calls.first?.statusCode == 200)
+    }
+
+    @Test("rawEvents opens an independent connection from typed iteration")
+    func rawEventsOpensIndependentConnection() async throws {
+        // Accessing rawEvents on a stream returned by client.stream() invokes the
+        // line-source factory again, opening a second HTTP connection. This test
+        // documents the single-pass contract: each consumer gets its own connection.
+        StreamCapturingURLProtocol.reset(body: Self.sseBody)
+        let client: NetworkClient = NetworkClient(
+            environment: ClientStreamEnvironment(),
+            session: makeSession()
+        )
+        let stream: SSEStream<ClientStreamEndpoint> = client.stream(ClientStreamEndpoint())
+
+        // Typed iteration — opens connection 1.
+        for try await _ in stream {}
+        // rawEvents — opens connection 2.
+        for try await _ in stream.rawEvents {}
+
+        #expect(StreamCapturingURLProtocol.hits == 2)
+    }
+
+    @Test("Each connection has an isolated cancel handle: completing typed iteration does not abort rawEvents")
+    func connectionCancelIsolation() async throws {
+        // Connection 0 (typed iterator): delivers events + terminal sentinel.
+        // Connection 1 (rawEvents): hangs open — no body, never closes.
+        //
+        // PerConnectionURLProtocol ensures connection 0 only delivers data
+        // after connection 1 is established, so both are in-flight concurrently
+        // when the typed iterator reaches [DONE].
+        //
+        // Pre-fix (shared taskBox): typed completing called onCancel →
+        //   taskBox.cancel() — taskBox pointed to connection 1's task →
+        //   rawEvents was aborted prematurely.
+        // Post-fix (isolated taskBox per factory call): onCancel is a no-op;
+        //   each connection owns its cancel handle → rawEvents survives.
+        let typedBody = Data(("data: {\"text\":\"hello\"}\n\ndata: [DONE]\n\n").utf8)
+        PerConnectionURLProtocol.reset(bodies: [typedBody, nil])
+
+        let config: URLSessionConfiguration = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [PerConnectionURLProtocol.self]
+        let client: NetworkClient = NetworkClient(
+            environment: ClientStreamEnvironment(),
+            session: URLSession(configuration: config)
+        )
+        let stream: SSEStream<ClientStreamEndpoint> = client.stream(ClientStreamEndpoint())
+
+        let rawError: ErrorBox = ErrorBox()
+
+        // rawEvents: connection 1 hangs indefinitely.
+        let rawTask: Task<Void, Never> = Task {
+            do { for try await _ in stream.rawEvents {} }
+            catch { await rawError.set(error) }
+        }
+
+        // Typed iteration: connection 0, completes after [DONE].
+        // The protocol holds connection 0 until connection 1 is open, so both
+        // are in-flight before typed delivers any data.
+        let count: Int = try await consumeCount(stream)
+        #expect(count == 2)  // chunk("hello") + done
+
+        // Allow any pending cancel signals to propagate.
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        // rawEvents must NOT have been aborted when typed iteration completed.
+        #expect(await rawError.value == nil)
+
+        rawTask.cancel()
+        await rawTask.value
     }
 
     private func consumeCount(_ stream: SSEStream<ClientStreamEndpoint>) async throws -> Int {

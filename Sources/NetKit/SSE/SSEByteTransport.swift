@@ -35,7 +35,6 @@ extension NetworkClient {
     ) -> SSEStream<E> {
         let timeout: TimeInterval = configuration.timeout
         let dependencies: SSEStreamDependencies = sseDependencies
-        let taskBox: SSEStreamTaskBox = SSEStreamTaskBox()
 
         // Derive config from the shared session so test URLProtocols are inherited;
         // raise timeouts for a persistent connection. `session.configuration` returns
@@ -49,8 +48,13 @@ extension NetworkClient {
         let encoder: JSONEncoder = dependencies.encoder
         let baseSession: URLSession = dependencies.session
 
+        // The taskBox is created inside the factory so that each invocation
+        // (makeAsyncIterator or rawEvents) owns its own cancel handle. A shared
+        // taskBox would be overwritten on every set() call, causing one iterator's
+        // cancel() to kill a different iterator's in-flight task.
         let lineSource: @Sendable () -> AsyncThrowingStream<String, any Error> = { [self] in
-            SSEByteTransport.makeLineSource(
+            let taskBox: SSEStreamTaskBox = SSEStreamTaskBox()
+            return SSEByteTransport.makeLineSource(
                 configuration: streamingConfiguration,
                 baseSession: baseSession,
                 taskBox: taskBox,
@@ -83,10 +87,7 @@ extension NetworkClient {
             )
         }
 
-        return SSEStream(
-            lineSource: lineSource,
-            onCancel: { taskBox.cancel() }
-        )
+        return SSEStream(lineSource: lineSource)
     }
 }
 

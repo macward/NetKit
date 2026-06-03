@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `SSEStream`'s internal `SSEStreamTaskBox` is now created inside the line-source factory rather
+  than outside it. Previously a single shared `taskBox` was passed to every factory invocation
+  (typed `makeAsyncIterator()` and `rawEvents`): each `taskBox.set()` overwrote the previous task
+  handle, so cancelling one consumer could abort a concurrently-running consumer's in-flight
+  request. Each factory call now owns an isolated `taskBox`; cancellation of one connection is
+  fully scoped to that connection. `SSEStream` is documented as single-pass: each `for try await`
+  loop and each `rawEvents` access opens an independent connection.
+
 - `SSELineParser` no longer dispatches events whose data buffer is empty, matching the WHATWG SSE
   spec ("if the data buffer is an empty string, return"). Previously any `event:`, `id:`, or
   `retry:` field alone caused a dispatch with `data = ""`, which reached the discriminator's
