@@ -7,8 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `SSEStream`'s internal `SSEStreamTaskBox` is now created inside the line-source factory rather
+  than outside it. Previously a single shared `taskBox` was passed to every factory invocation
+  (typed `makeAsyncIterator()` and `rawEvents`): each `taskBox.set()` overwrote the previous task
+  handle, so cancelling one consumer could abort a concurrently-running consumer's in-flight
+  request. Each factory call now owns an isolated `taskBox`; cancellation of one connection is
+  fully scoped to that connection. `SSEStream` is documented as single-pass: each `for try await`
+  loop and each `rawEvents` access opens an independent connection.
+
+- `SSELineParser` no longer dispatches events whose data buffer is empty, matching the WHATWG SSE
+  spec ("if the data buffer is an empty string, return"). Previously any `event:`, `id:`, or
+  `retry:` field alone caused a dispatch with `data = ""`, which reached the discriminator's
+  `init(eventName:data:)` and typically threw a decoding error that killed the stream. The fix
+  replaces the `hasBufferedField` guard with `!dataLines.isEmpty`: a blank line only dispatches
+  when at least one `data:` field was accumulated for the current event. An explicit `data:` line
+  with an empty value still dispatches (data buffer is non-empty per spec).
+
+- SSE streaming now validates the HTTP response status code and runs the response interceptor chain
+  at connection time. Previously `SSEByteTransport` discarded the `URLResponse` returned by
+  `URLSession.bytes(for:)`, so non-2xx responses (401, 403, 500, …) silently streamed garbage bytes
+  instead of throwing. Response interceptors (logging, auth) were also never called on the initial
+  response. The fix captures the `HTTPURLResponse`, runs interceptors with the response headers
+  (empty body — SSE has no buffered response body), then calls `validateResponse` before any lines
+  are emitted. `NetworkError` propagates through `SSEStream.nextFromLines` unchanged so callers
+  receive the structured error rather than `SSEError.unexpectedDisconnect`.
+
+- SSE streaming now inherits certificate pinning from the client's `URLSession`. Previously
+  `SSEByteTransport` created a new `URLSession` using only the session's configuration, silently
+  discarding its `URLSessionDelegate` (e.g. `CertificatePinningDelegate`). A MITM certificate that
+  `request(_:)` would have rejected was therefore accepted by `stream(_:)`. The fix passes the full
+  session (via `SSEStreamDependencies.session`) through to `makeLineSource`, which now constructs
+  the streaming session with `URLSession(configuration:delegate:delegateQueue:)` reusing the
+  original delegate.
+
 ### Added
 
+- Server-Sent Events (SSE) streaming: type-safe, incremental consumption of `text/event-stream`
+  endpoints. Declare an `SSEEndpoint` (refines `Endpoint`, defaults `Response` to `EmptyResponse`)
+  whose `associatedtype Event: SSEDecodableEvent` owns discrimination via
+  `init(eventName:data:) throws` and a generic `isTerminal` flag. Consume with
+  `for try await event in client.stream(endpoint)`: the client opens `URLSession.bytes` with a
+  long timeout, forces `Accept: text/event-stream`, runs request interceptors (so `AuthInterceptor`
+  injects the Bearer), and bypasses cache and deduplication. `SSEStream<E>` delivers typed events
+  as they arrive, ends on a terminal event, surfaces decode failures as `SSEError.decodingFailed`
+  and mid-stream cuts as `SSEError.unexpectedDisconnect(lastEventID:)`, cancels the underlying
+  request when the consuming task is cancelled, and exposes raw `SSEEvent`s via `rawEvents`. Public
+  surface: `SSEEndpoint`, `SSEDecodableEvent`, `SSEEvent`, `SSEStream`, `SSEError`,
+  `SSEConfiguration`, and `NetworkClient.stream(_:)` / `NetworkClientProtocol`.
+- SSE dialect presets (transport modeling only, not SDKs): `OpenAIStreamEvent` (discriminates by
+  `data` content, `[DONE]` sentinel as a terminal case without JSON decode) and
+  `AnthropicStreamEvent` (discriminates by event name — `content_block_delta`, `message_stop`,
+  …— into distinct typed cases).
+- SSE testing support: `MockNetworkClient.stubStream(_:events:error:)` injects a pre-cooked
+  sequence of typed events (and an optional error) so consumers can test stream-consuming code
+  with no network.
 - SwiftUI-native data layer (`@Resource`): a small observable query cache layered on
   `NetworkClientProtocol`, in the spirit of TanStack Query. A view declares the resource it
   needs and receives observable state (`phase` with `value`/`error`/`isLoading`), a cache

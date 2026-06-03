@@ -11,6 +11,8 @@ public actor MockNetworkClient: NetworkClientProtocol {
     private var uploadStubs: [ObjectIdentifier: Any] = [:]
     private var downloadStubs: [ObjectIdentifier: URL] = [:]
     private var progressSequences: [ObjectIdentifier: [TransferProgress]] = [:]
+    private var streamEventStubs: [ObjectIdentifier: [Any]] = [:]
+    private var streamErrorStubs: [ObjectIdentifier: any Error] = [:]
 
     /// Internal struct to track sequence-based stubs
     private struct SequenceStub {
@@ -115,6 +117,33 @@ public actor MockNetworkClient: NetworkClientProtocol {
         errorStubs.removeValue(forKey: key)
     }
 
+    // MARK: - Stream Stubbing
+
+    /// Stubs a sequence of pre-built events for an SSE endpoint type.
+    ///
+    /// When the corresponding `stream(_:)` is iterated, the events are yielded in
+    /// order with no network and no parsing. If `error` is provided, it is thrown
+    /// from the stream *after* all preceding events have been delivered, which
+    /// lets a test exercise the failure path of a `for try await` loop.
+    ///
+    /// - Parameters:
+    ///   - type: The SSE endpoint type to stub.
+    ///   - events: The events to yield, in order.
+    ///   - error: An optional error to throw after the events are delivered.
+    public func stubStream<E: SSEEndpoint>(
+        _ type: E.Type,
+        events: [E.Event],
+        error: (any Error)? = nil
+    ) {
+        let key: ObjectIdentifier = stubKey(for: type)
+        streamEventStubs[key] = events
+        if let error {
+            streamErrorStubs[key] = error
+        } else {
+            streamErrorStubs.removeValue(forKey: key)
+        }
+    }
+
     // MARK: - Call Tracking
 
     /// Returns the number of times an endpoint type was called.
@@ -150,6 +179,8 @@ public actor MockNetworkClient: NetworkClientProtocol {
         callCounts.removeAll()
         calledEndpoints.removeAll()
         sequenceStubs.removeAll()
+        streamEventStubs.removeAll()
+        streamErrorStubs.removeAll()
     }
 
     // MARK: - NetworkClientProtocol
@@ -395,6 +426,52 @@ public actor MockNetworkClient: NetworkClientProtocol {
         continuation.yield(TransferProgress.completed(totalBytes: 1000))
         continuation.finish()
         return destination
+    }
+
+    // MARK: - Streaming Methods
+
+    public nonisolated func stream<E: SSEEndpoint>(_ endpoint: E) -> SSEStream<E> {
+        SSEStream(elements: {
+            AsyncThrowingStream { continuation in
+                let task = Task {
+                    let stub: (events: [E.Event], error: (any Error)?) = await self.stubbedStream(for: endpoint)
+                    for event in stub.events {
+                        continuation.yield(event)
+                    }
+                    if let error = stub.error {
+                        continuation.finish(throwing: error)
+                    } else {
+                        continuation.finish()
+                    }
+                }
+                continuation.onTermination = { _ in
+                    task.cancel()
+                }
+            }
+        })
+    }
+
+    /// Retrieves the configured stream stub for an endpoint, recording the call.
+    ///
+    /// If no stub is configured this returns an empty event list with no error,
+    /// so the stream simply finishes cleanly (an empty stream). This keeps the
+    /// "no stub" path quiet rather than surprising a consumer with an error.
+    private func stubbedStream<E: SSEEndpoint>(
+        for endpoint: E
+    ) -> (events: [E.Event], error: (any Error)?) {
+        let key: ObjectIdentifier = stubKey(for: E.self)
+
+        callCounts[key, default: 0] += 1
+        if calledEndpoints[key] == nil {
+            calledEndpoints[key] = [E]()
+        }
+        var endpoints = (calledEndpoints[key] as? [E]) ?? []
+        endpoints.append(endpoint)
+        calledEndpoints[key] = endpoints
+
+        let events: [E.Event] = (streamEventStubs[key] as? [E.Event]) ?? []
+        let error: (any Error)? = streamErrorStubs[key]
+        return (events, error)
     }
 }
 
