@@ -83,6 +83,48 @@ var body: some View {
 }
 ```
 
+## Dynamic resources (a runtime `id`)
+
+The examples above pass a literal — `GetUser(id: "123")` — because a property wrapper
+initialized **on its declaration line** can only use constants: Swift does not let that
+expression reference `self` or the view's other properties. In practice the resource almost
+always depends on a value passed in from outside (a navigation target, a parent's `@State`, a
+list element). Build the resource in a custom `init` instead, assigning the wrapper through
+its underscored storage — the same pattern SwiftData's `@Query` uses:
+
+```swift
+struct ProfileView: View {
+    @Resource var user: QueryEntry<User>
+
+    init(id: String) {
+        _user = Resource(GetUser(id: id))
+    }
+
+    var body: some View {
+        if let user = user.value {
+            Text(user.name)
+        } else if user.isLoading {
+            ProgressView()
+        } else if let error = user.error {
+            Text(error.localizedDescription)
+        }
+    }
+}
+
+// The id now flows in from wherever you need it:
+ProfileView(id: selectedUserID)
+ForEach(userIDs, id: \.self) { ProfileView(id: $0) }
+```
+
+`staleTime` is passed the same way: `_user = Resource(GetUser(id: id), staleTime: .seconds(30))`.
+
+**Changing the `id` re-binds automatically.** When the same view (by SwiftUI identity)
+re-renders with a different endpoint, `@Resource` resolves the new `QueryKey`, releases its
+observation of the previous key, and subscribes to the new one — no stale observers, no manual
+teardown. The view simply re-renders against the new resource's `phase`, keeping the previous
+value on screen until the new one loads. This mirrors how a keyed query (`['user', id]`)
+re-fetches when its `id` changes in TanStack Query.
+
 ## Manual refetch
 
 Force a fresh fetch — e.g. from a pull-to-refresh or a "retry" button — with `refetch()`:
