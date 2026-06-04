@@ -318,6 +318,99 @@ struct InFlightRequestTrackerTests {
         #expect(retrievedTask == nil)
     }
 
+    @Test("decrementWaiter removes entry when count reaches zero and cancels task")
+    func decrementWaiterCancelsTaskAtZero() async {
+        let tracker = InFlightRequestTracker()
+        var request = URLRequest(url: URL(string: "https://api.example.com/test")!)
+        request.httpMethod = "GET"
+        let key = SendableRequestKey(RequestKey(from: request))
+
+        let slowTask = Task<Data, Error> {
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+            return Data()
+        }
+
+        let result = await tracker.getOrCreate(for: key) { slowTask }
+        #expect(result.wasCreated == true)
+        #expect(await tracker.existingTask(for: key) != nil)
+
+        // Single waiter leaves — count hits 0, task must be cancelled
+        await tracker.decrementWaiter(for: key)
+
+        #expect(await tracker.existingTask(for: key) == nil)
+        #expect(slowTask.isCancelled)
+        // Drain the cancelled task so the runner can clean up
+        _ = try? await slowTask.value
+    }
+
+    @Test("decrementWaiter does not cancel task while other waiters remain")
+    func decrementWaiterKeepsTaskWithRemainingWaiters() async {
+        let tracker = InFlightRequestTracker()
+        var request = URLRequest(url: URL(string: "https://api.example.com/test")!)
+        request.httpMethod = "GET"
+        let key = SendableRequestKey(RequestKey(from: request))
+
+        let slowTask = Task<Data, Error> {
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+            return Data()
+        }
+
+        // Two callers join — pass the same task; the second call reuses the existing entry
+        let result1 = await tracker.getOrCreate(for: key) { slowTask }
+        let result2 = await tracker.getOrCreate(for: key) { slowTask }
+        #expect(result1.wasCreated == true)
+        #expect(result2.wasCreated == false)
+
+        // First caller leaves — one waiter still holds the slot
+        await tracker.decrementWaiter(for: key)
+        #expect(await tracker.existingTask(for: key) != nil)
+        #expect(!slowTask.isCancelled)
+
+        // Second caller leaves — count hits 0
+        await tracker.decrementWaiter(for: key)
+        #expect(await tracker.existingTask(for: key) == nil)
+        #expect(slowTask.isCancelled)
+        _ = try? await slowTask.value
+    }
+
+    @Test("decrementWaiter is a no-op for unknown key")
+    func decrementWaiterUnknownKeyIsNoOp() async {
+        let tracker = InFlightRequestTracker()
+        var request = URLRequest(url: URL(string: "https://api.example.com/test")!)
+        request.httpMethod = "GET"
+        let key = SendableRequestKey(RequestKey(from: request))
+
+        // Should not crash when key is absent
+        await tracker.decrementWaiter(for: key)
+    }
+
+    @Test("getOrCreate increments waiter count for each caller")
+    func getOrCreateIncrementsWaiterCount() async {
+        let tracker = InFlightRequestTracker()
+        var request = URLRequest(url: URL(string: "https://api.example.com/test")!)
+        request.httpMethod = "GET"
+        let key = SendableRequestKey(RequestKey(from: request))
+
+        let slowTask = Task<Data, Error> {
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+            return Data()
+        }
+
+        // Three callers join; all reuse the same task after the first
+        _ = await tracker.getOrCreate(for: key) { slowTask }
+        _ = await tracker.getOrCreate(for: key) { slowTask }
+        _ = await tracker.getOrCreate(for: key) { slowTask }
+
+        // Three decrements needed before the task is cancelled
+        await tracker.decrementWaiter(for: key)
+        #expect(!slowTask.isCancelled)
+        await tracker.decrementWaiter(for: key)
+        #expect(!slowTask.isCancelled)
+        await tracker.decrementWaiter(for: key)
+        #expect(slowTask.isCancelled)
+        _ = try? await slowTask.value
+    }
+
     @Test("Different keys maintain separate tasks")
     func differentKeysSeparateTasks() async {
         let tracker = InFlightRequestTracker()
