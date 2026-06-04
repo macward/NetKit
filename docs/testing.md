@@ -131,6 +131,62 @@ await mockClient.stubDownload(
 )
 ```
 
+### Stub SSE Stream (elements mode)
+
+Injects pre-built typed events with no parsing. Use for testing consumer logic — how your code
+handles events — not the parsing pipeline.
+
+```swift
+await mockClient.stubStream(ChatStreamEndpoint.self, events: [
+    .delta(OpenAIDelta(choices: [.init(delta: .init(content: "Hello"))])),
+    .done
+])
+
+for try await event in mockClient.stream(ChatStreamEndpoint()) {
+    handle(event)
+}
+```
+
+> **Note:** Elements mode bypasses the SSE parser, the `SSEDecodableEvent` discriminator, and
+> terminal / disconnect semantics. A sequence that ends without a terminal event finishes
+> *cleanly* here but would throw `SSEError.unexpectedDisconnect` against a real server.
+
+### Stub SSE Stream (lines mode)
+
+Feeds raw SSE text lines through the **real** parser pipeline — including `SSELineParser`,
+`SSEDecodableEvent.init(eventName:data:)`, `isTerminal`, and `unexpectedDisconnect`. Use when
+a test must verify these behaviors.
+
+```swift
+await mockClient.stubStreamLines(ChatStreamEndpoint.self, lines: [
+    "event: content_block_delta",
+    "data: {\"delta\":{\"text\":\"Hello\"}}",
+    "",
+    "event: message_stop",
+    "data: {}",
+    ""
+])
+```
+
+The key difference: with `stubStreamLines`, a stream that ends without a terminal event throws
+`SSEError.unexpectedDisconnect` — just like a real server closing the connection early.
+
+```swift
+// Lines mode — no terminal → throws unexpectedDisconnect
+await mockClient.stubStreamLines(MyEndpoint.self, lines: [
+    "data: partial", ""
+])
+do {
+    for try await _ in mockClient.stream(MyEndpoint()) {}
+} catch let error as SSEError {
+    // error == .unexpectedDisconnect(lastEventID: nil)
+}
+
+// Elements mode — no terminal → finishes cleanly
+await mockClient.stubStream(MyEndpoint.self, events: [.partial])
+for try await _ in mockClient.stream(MyEndpoint()) {} // no throw
+```
+
 ### Verification Methods
 
 ```swift

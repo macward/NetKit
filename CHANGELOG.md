@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rawEvents` no longer hangs indefinitely when the consuming task is cancelled while an open
+  connection produces no bytes. The inner producer `Task` now uses `withTaskCancellationHandler`:
+  when `onTermination` calls `task.cancel()`, the `onCancel` closure fires synchronously and calls
+  `continuation.finish(throwing: CancellationError())`, unblocking the consumer immediately without
+  waiting for the URLSession teardown chain (`invalidateAndCancel` → `stopLoading` →
+  `URLError.cancelled`).
+
+- `SSEStream`'s `onCancel` hook now fires when the consumer exits the `for try await` loop via
+  `break` (early termination without reaching the end). Previously `finalize()` was only called
+  from inside `next()`, so breaking out of the loop silently dropped any cleanup wired into the
+  hook. Network teardown already happened through `onTermination`; the fix adds an `OnDeinit`
+  helper stored in `AsyncIterator` whose `deinit` fires `onCancel.fire()` when the struct is
+  dropped. A `CancelOnce` wrapper ensures the hook executes at most once regardless of which path
+  triggers it first.
+
+- `SSEStream` now delivers a buffered partial event before throwing
+  `SSEError.unexpectedDisconnect` when a server closes the connection without a final blank line.
+  Previously the event was discarded silently. `SSELineParser` gains a `flush()` method that
+  dispatches any accumulated data lines; `nextFromLines` calls it when the line source reaches
+  EOF, returns the decoded event on the current pull, and defers the disconnect error to the
+  next pull via an internal `sourceEnded` flag.
+
+- `URLError.cancelled` thrown by `URLSession` during task cancellation is now correctly treated
+  as cooperative cancellation (returns `nil` from `next()`) rather than being wrapped in
+  `SSEError.unexpectedDisconnect`. This prevents callers from treating a deliberate
+  cancellation as a reconnectable network failure.
+
 - `SSEStream`'s internal `SSEStreamTaskBox` is now created inside the line-source factory rather
   than outside it. Previously a single shared `taskBox` was passed to every factory invocation
   (typed `makeAsyncIterator()` and `rawEvents`): each `taskBox.set()` overwrote the previous task
@@ -62,7 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   …— into distinct typed cases).
 - SSE testing support: `MockNetworkClient.stubStream(_:events:error:)` injects a pre-cooked
   sequence of typed events (and an optional error) so consumers can test stream-consuming code
-  with no network.
+  with no network. `MockNetworkClient.stubStreamLines(_:lines:error:)` is a complementary
+  overload that feeds raw SSE text lines through the real `SSELineParser` →
+  `SSEDecodableEvent` → `isTerminal` / `unexpectedDisconnect` pipeline, enabling tests that
+  cover terminal semantics and disconnect behavior that the elements-mode stub bypasses.
 - SwiftUI-native data layer (`@Resource`): a small observable query cache layered on
   `NetworkClientProtocol`, in the spirit of TanStack Query. A view declares the resource it
   needs and receives observable state (`phase` with `value`/`error`/`isLoading`), a cache
