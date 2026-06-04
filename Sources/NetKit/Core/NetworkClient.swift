@@ -154,7 +154,14 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             let wasDeduplicatedRequest: Bool = !result.wasCreated
 
             do {
-                let data: Data = try await result.task.value
+                // When the calling task is cancelled, decrement the waiter count rather than
+                // letting the detached task run until completion with no consumer.
+                // If this is the last waiter, decrementWaiter cancels the detached task too.
+                let data: Data = try await withTaskCancellationHandler {
+                    try await result.task.value
+                } onCancel: {
+                    Task { await requestTracker.decrementWaiter(for: requestKey) }
+                }
                 await requestTracker.remove(key: requestKey)
 
                 // Only collect metrics for deduplicated waiters; the original request collects its own
@@ -172,6 +179,9 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                 }
 
                 return try decodeResponse(data, for: endpoint, request: requestSnapshot, response: nil)
+            } catch is CancellationError {
+                // onCancel already handled the waiter-count decrement; nothing else to do.
+                throw CancellationError()
             } catch {
                 await requestTracker.remove(key: requestKey)
 
