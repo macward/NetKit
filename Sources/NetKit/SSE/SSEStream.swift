@@ -52,17 +52,18 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
     ///
     /// Two modes are supported, sharing the same public surface:
     /// - ``Source/lines`` drives the full bytes → parser → typed decode pipeline
-    ///   used by the real transport (task 004/005).
+    ///   used by the real transport.
     /// - ``Source/elements`` yields pre-built `E.Event` values directly, used by
     ///   ``MockNetworkClient`` to inject deterministic sequences without a parser
-    ///   or any decoding (task 006).
+    ///   or any decoding.
     private let source: Source
 
-    /// Invoked exactly once when iteration finalizes for any reason (terminal
-    /// event, error, cancellation, or normal end). Defaults to a no-op; the
-    /// network factory passes `{ task.cancel() }` here so abandoning the
-    /// `for await` cuts the underlying HTTP request.
-    private let onCancel: @Sendable () -> Void
+    /// Invoked **at most once** when iteration ends for any reason: terminal
+    /// event, error, task cancellation, or the consumer breaking early out of the
+    /// `for try await` loop. The hook fires either from `finalize()` inside
+    /// `next()` or, for early `break`, when the iterator is dropped (via the
+    /// iterator's `OnDeinit` helper). Defaults to a no-op.
+    private let onCancel: CancelOnce
 
     /// The backing source of an ``SSEStream``.
     enum Source: Sendable {
@@ -77,20 +78,19 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
 
     /// Creates an SSE stream from an injected line source.
     ///
-    /// This is the internal seam used by the client-facing factory (task 005),
-    /// the dialect presets (task 006+), and the test suite. It performs no
-    /// networking.
+    /// This is the internal seam used by the client-facing factory, the dialect
+    /// presets, and the test suite. It performs no networking.
     ///
     /// - Parameters:
     ///   - lineSource: A factory that returns a fresh line stream per iterator.
-    ///   - onCancel: A hook invoked once when iteration finalizes. Defaults to a
-    ///     no-op.
+    ///   - onCancel: A hook invoked at most once when iteration ends for any
+    ///     reason. Defaults to a no-op.
     init(
         lineSource: @escaping @Sendable () -> AsyncThrowingStream<String, any Error>,
         onCancel: @escaping @Sendable () -> Void = {}
     ) {
         self.source = .lines(lineSource)
-        self.onCancel = onCancel
+        self.onCancel = CancelOnce(onCancel)
     }
 
     /// Creates an SSE stream from an injected element source.
@@ -104,16 +104,24 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
     /// This is the seam used by ``MockNetworkClient`` to inject deterministic
     /// event sequences in tests. It performs no networking.
     ///
+    /// > Important: Elements mode bypasses the SSE line parser, the
+    /// > ``SSEDecodableEvent`` discriminator, and the `isTerminal` /
+    /// > ``SSEError/unexpectedDisconnect(lastEventID:)`` logic. Tests that use
+    /// > this mode verify event-consumption behavior but do NOT exercise the
+    /// > real parsing/decoding pipeline or the terminal/disconnect semantics.
+    /// > Use ``SSEStream/init(lineSource:onCancel:)`` to exercise the full
+    /// > pipeline in tests.
+    ///
     /// - Parameters:
     ///   - elements: A factory that returns a fresh event stream per iterator.
-    ///   - onCancel: A hook invoked once when iteration finalizes. Defaults to a
-    ///     no-op.
+    ///   - onCancel: A hook invoked at most once when iteration ends. Defaults to
+    ///     a no-op.
     init(
         elements: @escaping @Sendable () -> AsyncThrowingStream<E.Event, any Error>,
         onCancel: @escaping @Sendable () -> Void = {}
     ) {
         self.source = .elements(elements)
-        self.onCancel = onCancel
+        self.onCancel = CancelOnce(onCancel)
     }
 
     public func makeAsyncIterator() -> AsyncIterator {
@@ -143,7 +151,7 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
             // Elements mode has no wire-level events to expose.
             return AsyncThrowingStream { $0.finish() }
         }
-        let cancel: @Sendable () -> Void = onCancel
+        let cancel: CancelOnce = onCancel
         return AsyncThrowingStream { continuation in
             let task = Task {
                 // Defer the factory call to inside the Task so the connection is
@@ -151,20 +159,35 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 let source: AsyncThrowingStream<String, any Error> = lineSource()
                 var parser = SSELineParser()
                 do {
-                    for try await line in source {
-                        try Task.checkCancellation()
-                        if let event: SSEEvent = parser.consume(line: line) {
+                    // withTaskCancellationHandler ensures that when this Task is
+                    // cancelled (via onTermination → task.cancel()), the consuming
+                    // for-await is unblocked immediately — without waiting for the
+                    // URLSession chain (invalidateAndCancel → stopLoading →
+                    // URLError.cancelled) to propagate. Without this, rawTask hangs
+                    // when rawTask.cancel() races with a long-lived open connection.
+                    try await withTaskCancellationHandler {
+                        for try await line in source {
+                            try Task.checkCancellation()
+                            if let event: SSEEvent = parser.consume(line: line) {
+                                continuation.yield(event)
+                            }
+                        }
+                        if let event: SSEEvent = parser.flush() {
                             continuation.yield(event)
                         }
+                        continuation.finish()
+                    } onCancel: {
+                        // Fired synchronously when task.cancel() is called.
+                        // Idempotent: subsequent finish() calls are no-ops.
+                        continuation.finish(throwing: CancellationError())
                     }
-                    continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
             continuation.onTermination = { _ in
                 task.cancel()
-                cancel()
+                cancel.fire()
             }
         }
     }
@@ -182,7 +205,12 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
         }
 
         private var mode: Mode
-        private let onCancel: @Sendable () -> Void
+        private let onCancel: CancelOnce
+        /// Fires the cancel hook when the iterator struct is dropped without
+        /// `finalize()` being called (e.g. the consumer exits via `break`). The
+        /// class is held exclusively by this iterator, so its `deinit` fires as
+        /// soon as the iterator value is destroyed.
+        private let cancelOnDeinit: OnDeinit
 
         /// Whether a terminal event has already been delivered. Once `true`, a
         /// subsequent source end is a clean close rather than a disconnect.
@@ -192,20 +220,31 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
         /// invoked at most once.
         private var finalized: Bool = false
 
-        init(
+        /// Set to `true` after the line source ends cleanly and any final
+        /// flushed event has been returned. The next pull throws
+        /// ``SSEError/unexpectedDisconnect(lastEventID:)``.
+        private var sourceEnded: Bool = false
+
+        /// The `lastEventID` captured when `sourceEnded` becomes `true`, so it
+        /// is available on the subsequent pull that throws the disconnect error.
+        private var lastKnownEventID: String?
+
+        fileprivate init(
             lineSource: AsyncThrowingStream<String, any Error>,
-            onCancel: @escaping @Sendable () -> Void
+            onCancel: CancelOnce
         ) {
             self.mode = .lines(iterator: lineSource.makeAsyncIterator(), parser: SSELineParser())
             self.onCancel = onCancel
+            self.cancelOnDeinit = OnDeinit { onCancel.fire() }
         }
 
-        init(
+        fileprivate init(
             elementSource: AsyncThrowingStream<E.Event, any Error>,
-            onCancel: @escaping @Sendable () -> Void
+            onCancel: CancelOnce
         ) {
             self.mode = .elements(iterator: elementSource.makeAsyncIterator())
             self.onCancel = onCancel
+            self.cancelOnDeinit = OnDeinit { onCancel.fire() }
         }
 
         public mutating func next() async throws -> E.Event? {
@@ -274,6 +313,12 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 return nil
             }
 
+            // The final flushed event was already returned on the previous pull.
+            if sourceEnded {
+                finalize()
+                throw SSEError.unexpectedDisconnect(lastEventID: lastKnownEventID)
+            }
+
             guard case .lines(var iterator, var parser) = mode else {
                 return nil
             }
@@ -295,16 +340,39 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                     finalize()
                     throw error
                 } catch {
-                    // The transport was cut mid-stream.
                     mode = .lines(iterator: iterator, parser: parser)
                     finalize()
+                    // A cancelled task causes URLSession to throw URLError.cancelled.
+                    // Treat this as cooperative cancellation (return nil) rather than
+                    // wrapping it in unexpectedDisconnect, which would mislead callers
+                    // into treating cancellation as a reconnectable network failure.
+                    if Task.isCancelled {
+                        return nil
+                    }
                     throw SSEError.unexpectedDisconnect(lastEventID: parser.lastEventID)
                 }
 
                 guard let line else {
-                    // Source finished. Without a terminal, this is unexpected.
+                    // Flush any event buffered without a closing blank line (e.g. a
+                    // server that closes the connection without a final \n\n). If
+                    // there is a partial event, return it now and defer the
+                    // unexpectedDisconnect error to the next pull via sourceEnded.
+                    if let flushed: SSEEvent = parser.flush() {
+                        let event: E.Event = try decodeOrFinalize(flushed, parser: &parser, iterator: &iterator)
+                        sourceEnded = true
+                        lastKnownEventID = parser.lastEventID
+                        if event.isTerminal { terminalDelivered = true }
+                        mode = .lines(iterator: iterator, parser: parser)
+                        return event
+                    }
                     mode = .lines(iterator: iterator, parser: parser)
                     finalize()
+                    // A cancelled task causes the line-source producer to finish
+                    // cleanly (nil), not throw. Treat this as cooperative
+                    // cancellation rather than a network disconnect.
+                    if Task.isCancelled {
+                        return nil
+                    }
                     throw SSEError.unexpectedDisconnect(lastEventID: parser.lastEventID)
                 }
 
@@ -313,25 +381,33 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                     continue
                 }
 
-                let event: E.Event
-                do {
-                    event = try E.Event(eventName: rawEvent.event, data: rawEvent.data)
-                } catch let error as SSEError {
-                    mode = .lines(iterator: iterator, parser: parser)
-                    finalize()
-                    throw error
-                } catch {
-                    mode = .lines(iterator: iterator, parser: parser)
-                    finalize()
-                    throw SSEError.decodingFailed(error)
-                }
-
-                if event.isTerminal {
-                    terminalDelivered = true
-                }
-
+                let event: E.Event = try decodeOrFinalize(rawEvent, parser: &parser, iterator: &iterator)
+                if event.isTerminal { terminalDelivered = true }
                 mode = .lines(iterator: iterator, parser: parser)
                 return event
+            }
+        }
+
+        /// Decodes a raw ``SSEEvent`` into a typed `E.Event`.
+        ///
+        /// On failure, saves the current parser/iterator state, finalizes the
+        /// iterator, and rethrows — either the original ``SSEError`` or a wrapped
+        /// ``SSEError/decodingFailed(_:)`` for non-SSE errors.
+        private mutating func decodeOrFinalize(
+            _ raw: SSEEvent,
+            parser: inout SSELineParser,
+            iterator: inout AsyncThrowingStream<String, any Error>.AsyncIterator
+        ) throws -> E.Event {
+            do {
+                return try E.Event(eventName: raw.event, data: raw.data)
+            } catch let error as SSEError {
+                mode = .lines(iterator: iterator, parser: parser)
+                finalize()
+                throw error
+            } catch {
+                mode = .lines(iterator: iterator, parser: parser)
+                finalize()
+                throw SSEError.decodingFailed(error)
             }
         }
 
@@ -341,7 +417,48 @@ public struct SSEStream<E: SSEEndpoint>: AsyncSequence, Sendable {
                 return
             }
             finalized = true
-            onCancel()
+            onCancel.fire()
         }
+    }
+}
+
+// MARK: - CancelOnce / OnDeinit
+
+/// Runs a `@Sendable` block at most once, regardless of how many callers invoke `fire()`.
+///
+/// Shared between `SSEStream.AsyncIterator` and `SSEStream.rawEvents` so that a
+/// custom `onCancel` hook never fires more than once even if both paths are active.
+private final class CancelOnce: @unchecked Sendable {
+    private let lock: NSLock = NSLock()
+    private var fired: Bool = false
+    private let block: @Sendable () -> Void
+
+    init(_ block: @escaping @Sendable () -> Void) {
+        self.block = block
+    }
+
+    func fire() {
+        lock.lock()
+        let shouldFire: Bool = !fired
+        if shouldFire { fired = true }
+        lock.unlock()
+        if shouldFire { block() }
+    }
+}
+
+/// Fires a `@Sendable` block when this object is deallocated.
+///
+/// Stored inside `SSEStream.AsyncIterator` (a struct) so that the block runs
+/// when the iterator is dropped — e.g. when the consumer exits a `for try await`
+/// loop via `break` without going through `finalize()`.
+private final class OnDeinit: @unchecked Sendable {
+    private let block: @Sendable () -> Void
+
+    init(_ block: @escaping @Sendable () -> Void) {
+        self.block = block
+    }
+
+    deinit {
+        block()
     }
 }

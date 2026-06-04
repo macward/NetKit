@@ -310,4 +310,60 @@ struct SSEStreamTests {
         if case .chunk(let text) = received.first { #expect(text == "a") }
         if case .done = received.last {} else { Issue.record("Last event must be .done") }
     }
+
+    // swiftlint:disable:next line_length
+    @Test("Typed iterator delivers last event and then throws unexpectedDisconnect when server closes without trailing blank line")
+    func typedIteratorFlushesBufferedEventOnSourceEnd() async {
+        // Server closes after sending one event without a final blank line.
+        // The synthetic blank line emitted by emitLines causes the parser to
+        // dispatch the event; a subsequent nil from the source defers the
+        // unexpectedDisconnect to the next pull via sourceEnded.
+        let lines: [String] = [
+            "data: {\"text\":\"last\"}"  // no closing blank line
+        ]
+        let stream: SSEStream<StreamEndpoint> = SSEStream(lineSource: makeLineSource(lines))
+
+        var received: [StreamEvent] = []
+        var thrown: (any Error)?
+        do {
+            for try await event in stream {
+                received.append(event)
+            }
+        } catch {
+            thrown = error
+        }
+
+        #expect(received.count == 1)
+        if case .chunk(let text) = received.first {
+            #expect(text == "last")
+        } else {
+            Issue.record("Expected .chunk event, got \(String(describing: received.first))")
+        }
+        #expect(thrown as? SSEError == .unexpectedDisconnect(lastEventID: nil))
+    }
+
+    @Test("onCancel fires when consumer exits loop via break")
+    func onCancelFiresOnBreak() async {
+        let spy: CancelSpy = CancelSpy()
+
+        let stream: SSEStream<StreamEndpoint> = SSEStream(
+            lineSource: makeLineSource([
+                "data: {\"text\":\"a\"}",
+                "",
+                "data: {\"text\":\"b\"}",
+                ""
+            ]),
+            onCancel: { Task { await spy.markCancelled() } }
+        )
+
+        do {
+            for try await _ in stream {
+                break
+            }
+        } catch {}
+
+        // Allow the detached hook task to run.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await spy.wasCancelled())
+    }
 }

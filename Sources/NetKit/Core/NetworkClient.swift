@@ -114,9 +114,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
             }
         }
 
-        for interceptor in interceptors {
-            urlRequest = try await interceptor.intercept(request: urlRequest)
-        }
+        try await applyRequestInterceptors(to: &urlRequest)
 
         let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
 
@@ -259,9 +257,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                 }
 
                 var responseData: Data = data
-                for interceptor in interceptors.reversed() {
-                    responseData = try await interceptor.intercept(response: response, data: responseData)
-                }
+                try await applyResponseInterceptors(to: &responseData, response: response)
 
                 try validateResponse(response, request: requestSnapshot, data: responseData)
 
@@ -378,9 +374,7 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
                 }
 
                 var responseData: Data = data
-                for interceptor in interceptors.reversed() {
-                    responseData = try await interceptor.intercept(response: response, data: responseData)
-                }
+                try await applyResponseInterceptors(to: &responseData, response: response)
 
                 try validateResponse(response, request: requestSnapshot, data: responseData)
 
@@ -464,6 +458,20 @@ public final class NetworkClient: NetworkClientProtocol, Sendable {
     }
 
     // MARK: - Private Helpers
+
+    /// Applies the full request-interceptor chain to `request` in order.
+    func applyRequestInterceptors(to request: inout URLRequest) async throws {
+        for interceptor in interceptors {
+            request = try await interceptor.intercept(request: request)
+        }
+    }
+
+    /// Applies the full response-interceptor chain to `data` in reverse order.
+    func applyResponseInterceptors(to data: inout Data, response: HTTPURLResponse) async throws {
+        for interceptor in interceptors.reversed() {
+            data = try await interceptor.intercept(response: response, data: data)
+        }
+    }
 
     /// Adds conditional headers (If-None-Match, If-Modified-Since) to a request.
     private func addConditionalHeaders(to request: inout URLRequest, from metadata: CacheMetadata) {
@@ -765,9 +773,7 @@ extension NetworkClient {
             encoder: encoder
         )
 
-        for interceptor in interceptors {
-            urlRequest = try await interceptor.intercept(request: urlRequest)
-        }
+        try await applyRequestInterceptors(to: &urlRequest)
 
         if let formData {
             urlRequest.setValue(formData.contentType, forHTTPHeaderField: "Content-Type")
@@ -835,9 +841,7 @@ extension NetworkClient {
                 let responseSnapshot: ResponseSnapshot = ResponseSnapshot(response: httpResponse, data: data)
 
                 var responseData: Data = data
-                for interceptor in interceptors.reversed() {
-                    responseData = try await interceptor.intercept(response: httpResponse, data: responseData)
-                }
+                try await applyResponseInterceptors(to: &responseData, response: httpResponse)
 
                 try validateResponse(httpResponse, request: requestSnapshot, data: responseData)
 
@@ -911,9 +915,7 @@ extension NetworkClient {
             encoder: encoder
         )
 
-        for interceptor in interceptors {
-            urlRequest = try await interceptor.intercept(request: urlRequest)
-        }
+        try await applyRequestInterceptors(to: &urlRequest)
 
         let requestSnapshot: RequestSnapshot = RequestSnapshot(request: urlRequest)
         let endpointMetadata: EndpointMetadata = EndpointMetadata(endpoint: endpoint, environment: environment)
@@ -990,7 +992,6 @@ extension NetworkClient {
     internal var sseDependencies: SSEStreamDependencies {
         SSEStreamDependencies(
             environment: environment,
-            interceptors: interceptors,
             encoder: encoder,
             session: session
         )

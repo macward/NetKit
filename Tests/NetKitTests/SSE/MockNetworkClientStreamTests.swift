@@ -117,4 +117,75 @@ struct MockNetworkClientStreamTests {
 
         #expect(received.isEmpty)
     }
+
+    // MARK: - stubStreamLines
+
+    @Test("stubStreamLines exercises the real parser pipeline: events are delivered via SSE line parsing")
+    func stubStreamLinesDeliversEvents() async throws {
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stubStreamLines(MockStreamEndpoint.self, lines: [
+            "data: Hello",
+            "",
+            "data: World",
+            "",
+            "data: [DONE]",
+            ""
+        ])
+
+        var received: [MockStreamEvent] = []
+        do {
+            for try await event in mock.stream(MockStreamEndpoint()) {
+                received.append(event)
+            }
+        } catch {}
+
+        #expect(received == [.chunk(text: "Hello"), .chunk(text: "World"), .done])
+    }
+
+    @Test("stubStreamLines throws unexpectedDisconnect without terminal; stubStream finishes cleanly — documents the key difference")
+    func stubStreamLinesThrowsUnexpectedDisconnectWithoutTerminal() async {
+        // stubStream (elements mode): no terminal event → finishes cleanly.
+        let mockElements: MockNetworkClient = MockNetworkClient()
+        await mockElements.stubStream(MockStreamEndpoint.self, events: [.chunk(text: "partial")])
+
+        var elementsModeThrew: Bool = false
+        do {
+            for try await _ in mockElements.stream(MockStreamEndpoint()) {}
+        } catch {
+            elementsModeThrew = true
+        }
+        #expect(!elementsModeThrew, "elements mode finishes cleanly even without a terminal event")
+
+        // stubStreamLines (lines mode): no terminal event → unexpectedDisconnect.
+        let mockLines: MockNetworkClient = MockNetworkClient()
+        await mockLines.stubStreamLines(MockStreamEndpoint.self, lines: [
+            "data: partial",
+            ""
+        ])
+
+        var linesError: (any Error)?
+        do {
+            for try await _ in mockLines.stream(MockStreamEndpoint()) {}
+        } catch {
+            linesError = error
+        }
+        #expect(linesError as? SSEError == .unexpectedDisconnect(lastEventID: nil),
+                "lines mode throws unexpectedDisconnect when no terminal event is delivered")
+    }
+
+    @Test("reset clears stubStreamLines stubs")
+    func resetClearsLineStubs() async {
+        let mock: MockNetworkClient = MockNetworkClient()
+        await mock.stubStreamLines(MockStreamEndpoint.self, lines: ["data: hello", ""])
+        await mock.reset()
+
+        var received: [MockStreamEvent] = []
+        do {
+            for try await event in mock.stream(MockStreamEndpoint()) {
+                received.append(event)
+            }
+        } catch {}
+
+        #expect(received.isEmpty)
+    }
 }
