@@ -75,6 +75,7 @@ otherwise reimplement on top of any of the others.
 - Declarative endpoint macros (`@GET`/`@POST`/…) via the optional `NetKitMacros` package
 - Upload & download with real-time progress tracking
 - Multipart form data support
+- Server-Sent Events (SSE) streaming with typed events and dialect presets
 - Long polling for real-time updates
 - Automatic retry with exponential backoff
 - Response caching with HTTP header support
@@ -278,6 +279,7 @@ For detailed documentation, see the [docs](docs/) folder:
 | [Authentication](docs/authentication.md) | Auth Interceptors, Token Refresh |
 | [Caching & Retry](docs/caching-retry.md) | Response Caching, Retry Policy, Deduplication |
 | [Logging](docs/logging.md) | Logging, Sensitive Data Sanitization |
+| [SSE Streaming](docs/streaming-sse.md) | Server-Sent Events, typed events, dialect presets |
 | [Long Polling](docs/long-polling.md) | Real-time Updates with Long Polling |
 | [Transfers](docs/transfers.md) | Upload & Download with Progress |
 | [Certificate Pinning](docs/certificate-pinning.md) | SSL/TLS Security, MITM Protection |
