@@ -1,6 +1,7 @@
 import Foundation
 
 /// A mock network client for testing that allows stubbing responses and tracking calls.
+// swiftlint:disable:next type_body_length
 public actor MockNetworkClient: NetworkClientProtocol {
     private var stubs: [ObjectIdentifier: Any] = [:]
     private var errorStubs: [ObjectIdentifier: NetworkError] = [:]
@@ -13,6 +14,9 @@ public actor MockNetworkClient: NetworkClientProtocol {
     private var progressSequences: [ObjectIdentifier: [TransferProgress]] = [:]
     private var streamEventStubs: [ObjectIdentifier: [Any]] = [:]
     private var streamErrorStubs: [ObjectIdentifier: any Error] = [:]
+    // Line-based stubs live in a lock-protected container so that the
+    // nonisolated `stream<E>` method can read them synchronously.
+    private let lineStubStorage: LineStubStorage = LineStubStorage()
 
     /// Internal struct to track sequence-based stubs
     private struct SequenceStub {
@@ -122,9 +126,16 @@ public actor MockNetworkClient: NetworkClientProtocol {
     /// Stubs a sequence of pre-built events for an SSE endpoint type.
     ///
     /// When the corresponding `stream(_:)` is iterated, the events are yielded in
-    /// order with no network and no parsing. If `error` is provided, it is thrown
-    /// from the stream *after* all preceding events have been delivered, which
-    /// lets a test exercise the failure path of a `for try await` loop.
+    /// order with **no network and no parsing**. This is the fast path for
+    /// consumer-behavior tests.
+    ///
+    /// > Important: This mode bypasses the SSE line parser, the
+    /// > ``SSEDecodableEvent`` discriminator, and the `isTerminal` /
+    /// > ``SSEError/unexpectedDisconnect(lastEventID:)`` semantics. A sequence
+    /// > that ends without a terminal event finishes *cleanly* in the mock but
+    /// > would throw ``SSEError/unexpectedDisconnect(lastEventID:)`` against a
+    /// > real server. To exercise the full parsing pipeline — including terminal
+    /// > and disconnect behavior — use ``stubStreamLines(_:lines:error:)`` instead.
     ///
     /// - Parameters:
     ///   - type: The SSE endpoint type to stub.
@@ -142,6 +153,28 @@ public actor MockNetworkClient: NetworkClientProtocol {
         } else {
             streamErrorStubs.removeValue(forKey: key)
         }
+    }
+
+    /// Stubs a sequence of raw SSE lines for an SSE endpoint type.
+    ///
+    /// When the corresponding `stream(_:)` is iterated the lines are fed through
+    /// the **real** ``SSELineParser`` → ``SSEDecodableEvent`` → `isTerminal` /
+    /// ``SSEError/unexpectedDisconnect(lastEventID:)`` pipeline, exactly as they
+    /// would be against a live server. Use this overload when a test needs to
+    /// verify parsing behavior, terminal semantics, or disconnect handling.
+    ///
+    /// - Parameters:
+    ///   - type: The SSE endpoint type to stub.
+    ///   - lines: Raw SSE text lines, including blank delimiters (e.g.
+    ///     `["data: hello", ""]`).
+    ///   - error: An optional error to throw from the line source after the lines
+    ///     are delivered. Simulates a mid-stream transport cut.
+    public func stubStreamLines<E: SSEEndpoint>(
+        _ type: E.Type,
+        lines: [String],
+        error: (any Error)? = nil
+    ) {
+        lineStubStorage.set(lines, error: error, for: ObjectIdentifier(type))
     }
 
     // MARK: - Call Tracking
@@ -181,6 +214,7 @@ public actor MockNetworkClient: NetworkClientProtocol {
         sequenceStubs.removeAll()
         streamEventStubs.removeAll()
         streamErrorStubs.removeAll()
+        lineStubStorage.removeAll()
     }
 
     // MARK: - NetworkClientProtocol
@@ -431,7 +465,30 @@ public actor MockNetworkClient: NetworkClientProtocol {
     // MARK: - Streaming Methods
 
     public nonisolated func stream<E: SSEEndpoint>(_ endpoint: E) -> SSEStream<E> {
-        SSEStream(elements: {
+        let key: ObjectIdentifier = ObjectIdentifier(E.self)
+
+        // Prefer lines-mode stub when configured — it exercises the real SSE
+        // parser pipeline (including terminal/disconnect semantics).
+        if let lineStub = lineStubStorage.get(for: key) {
+            return SSEStream(lineSource: {
+                AsyncThrowingStream { continuation in
+                    let task = Task {
+                        await self.recordStreamCall(endpoint: endpoint)
+                        for line in lineStub.lines {
+                            continuation.yield(line)
+                        }
+                        if let error = lineStub.error {
+                            continuation.finish(throwing: error)
+                        } else {
+                            continuation.finish()
+                        }
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+            })
+        }
+
+        return SSEStream(elements: {
             AsyncThrowingStream { continuation in
                 let task = Task {
                     let stub: (events: [E.Event], error: (any Error)?) = await self.stubbedStream(for: endpoint)
@@ -449,6 +506,14 @@ public actor MockNetworkClient: NetworkClientProtocol {
                 }
             }
         })
+    }
+
+    private func recordStreamCall<E: SSEEndpoint>(endpoint: E) {
+        let key: ObjectIdentifier = ObjectIdentifier(E.self)
+        callCounts[key, default: 0] += 1
+        var endpoints: [E] = (calledEndpoints[key] as? [E]) ?? []
+        endpoints.append(endpoint)
+        calledEndpoints[key] = endpoints
     }
 
     /// Retrieves the configured stream stub for an endpoint, recording the call.
@@ -472,6 +537,39 @@ public actor MockNetworkClient: NetworkClientProtocol {
         let events: [E.Event] = (streamEventStubs[key] as? [E.Event]) ?? []
         let error: (any Error)? = streamErrorStubs[key]
         return (events, error)
+    }
+}
+
+// MARK: - LineStubStorage
+
+/// Thread-safe storage for raw SSE line stubs used by ``MockNetworkClient/stubStreamLines(_:lines:error:)``.
+///
+/// Lives outside the actor so that the `nonisolated` `stream<E>` method can
+/// read stubs synchronously without hopping to the actor executor.
+private final class LineStubStorage: @unchecked Sendable {
+    private let lock: NSLock = NSLock()
+    private var stubs: [ObjectIdentifier: [String]] = [:]
+    private var errors: [ObjectIdentifier: any Error] = [:]
+
+    func set(_ lines: [String], error: (any Error)?, for key: ObjectIdentifier) {
+        lock.lock()
+        stubs[key] = lines
+        if let error { errors[key] = error } else { errors.removeValue(forKey: key) }
+        lock.unlock()
+    }
+
+    func get(for key: ObjectIdentifier) -> (lines: [String], error: (any Error)?)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let lines = stubs[key] else { return nil }
+        return (lines, errors[key])
+    }
+
+    func removeAll() {
+        lock.lock()
+        stubs.removeAll()
+        errors.removeAll()
+        lock.unlock()
     }
 }
 

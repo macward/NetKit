@@ -44,6 +44,16 @@ struct SSELineParser {
     /// - Parameter line: A line from the stream, without its trailing newline.
     /// - Returns: A completed ``SSEEvent`` when a blank line closes the current
     ///   event, otherwise `nil`.
+    /// Dispatches any event that is buffered but has not yet been closed by a
+    /// blank line.
+    ///
+    /// Call this when the line source ends cleanly (EOF) to recover a trailing
+    /// event that a server sent without a final `\n\n`. Returns `nil` when no
+    /// `data:` lines are buffered.
+    mutating func flush() -> SSEEvent? {
+        dispatchEvent()
+    }
+
     mutating func consume(line: String) -> SSEEvent? {
         // A blank line dispatches the current event.
         guard !line.isEmpty else {

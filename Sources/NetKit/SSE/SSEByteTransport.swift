@@ -44,7 +44,6 @@ extension NetworkClient {
         streamingConfiguration.timeoutIntervalForResource = timeout
 
         let environment: NetworkEnvironment = dependencies.environment
-        let interceptors: [any Interceptor] = dependencies.interceptors
         let encoder: JSONEncoder = dependencies.encoder
         let baseSession: URLSession = dependencies.session
 
@@ -68,9 +67,7 @@ extension NetworkClient {
                     )
                     // Force the SSE Accept header, overriding any default.
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    for interceptor in interceptors {
-                        request = try await interceptor.intercept(request: request)
-                    }
+                    try await self.applyRequestInterceptors(to: &request)
                     return request
                 },
                 onResponse: { httpResponse, request in
@@ -79,9 +76,7 @@ extension NetworkClient {
                     // body at connection-open time, but interceptors should still observe
                     // headers (e.g. for logging or 401 detection).
                     var data: Data = Data()
-                    for interceptor in interceptors.reversed() {
-                        data = try await interceptor.intercept(response: httpResponse, data: data)
-                    }
+                    try await self.applyResponseInterceptors(to: &data, response: httpResponse)
                     try self.validateResponse(httpResponse, request: snapshot, data: data)
                 }
             )
@@ -96,7 +91,6 @@ extension NetworkClient {
 /// without exposing its `private` stored properties broadly.
 internal struct SSEStreamDependencies: Sendable {
     let environment: NetworkEnvironment
-    let interceptors: [any Interceptor]
     let encoder: JSONEncoder
     /// The full session — not just its configuration — so that a delegate
     /// (e.g. `CertificatePinningDelegate`) is inherited by the streaming session.
